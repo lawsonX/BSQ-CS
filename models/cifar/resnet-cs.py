@@ -6,13 +6,11 @@ https://github.com/facebook/fb.resnet.torch
 and
 https://github.com/pytorch/vision/blob/master/torchvision/models/resnet.py
 '''
-import os
 import torch
 import torch.nn as nn
 import math
-from bit import BitLinear, BitConv2d
+from bit_cs import BitLinear, BitConv2d
 import numpy as np
-import tqdm
 
 
 class PACTFunction(torch.autograd.Function):
@@ -171,39 +169,28 @@ class ResStage(nn.Module):
             
         self.block1 = BasicBlock(in_planes, out_planes, stride=stride, downsample=downsample, Nbits=Nbits, act_bit=4, bin=False)
         self.block2 = BasicBlock(out_planes, out_planes, stride=1, downsample=None, Nbits=Nbits, act_bit=4, bin=False)
+        self.block3 = BasicBlock(out_planes, out_planes, stride=1, downsample=None, Nbits=Nbits, act_bit=4, bin=False)
 
     def forward(self, x, temp):
         out = self.block1(x, temp)
         out = self.block2(out, temp)
+        out = self.block3(out, temp)
         return out
 
 class ResNet(nn.Module):
 
-    def __init__(self, depth, num_classes=10, block_name='BasicBlock', Nbits=4, act_bit=4, bin=True):
+    def __init__(self, num_classes=10, Nbits=4, act_bit=4, bin=True):
         super(ResNet, self).__init__()
-        # Model type specifies number of layers for CIFAR-10 model
-        if block_name.lower() == 'basicblock':
-            assert (depth - 2) % 6 == 0, 'When use basicblock, depth should be 6n+2, e.g. 20, 32, 44, 56, 110, 1202'
-            n = (depth - 2) // 6
-            block = BasicBlock
-        elif block_name.lower() == 'bottleneck':
-            assert (depth - 2) % 9 == 0, 'When use bottleneck, depth should be 9n+2, e.g. 20, 29, 47, 56, 110, 1199'
-            n = (depth - 2) // 9
-            block = Bottleneck
-        else:
-            raise ValueError('block_name shoule be Basicblock or Bottleneck')
 
-
-        self.inplanes = 16
         self.conv1 = BitConv2d(3, 16, kernel_size=3, padding=1,bias=False, Nbits=Nbits, bin=bin)
         self.bn1 = nn.BatchNorm2d(16)
         self.relu = nn.ReLU(inplace=True)
         self.layer1 = ResStage(16,16,1,1,Nbits,bin=bin)
         self.layer2 = ResStage(16,32,2,1,Nbits,bin=bin)
         self.layer3 = ResStage(32,64,2,1,Nbits,bin=bin)
-        self.layer4 = ResStage(64,128,2,1,Nbits,bin=bin)
-        self.avgpool = nn.AvgPool2d(4)
-        self.fc = BitLinear(128, num_classes, Nbits=Nbits, bin=bin)
+        # self.layer4 = ResStage(64,128,2,1,Nbits,bin=bin)
+        self.avgpool = nn.AvgPool2d(8)
+        self.fc = BitLinear(64, num_classes, Nbits=Nbits, bin=bin)
         self.temp = 1
 
         for m in self.modules():
@@ -450,6 +437,7 @@ def resnet(**kwargs):
     return ResNet(**kwargs)
 
 if __name__ == '__main__':
+    import os
     import torch.optim as optim
     import torchvision
     import torchvision.transforms as transform
@@ -461,7 +449,8 @@ if __name__ == '__main__':
     BATCH_SIZE = 128
     LR = 0.01
     LMBDA = 1e-8
-    save_dir = '/home/lawson/workspace/BSQ/train_result/0720/cs-resnet18-AutoTemp-c10-W8-lmbda'
+    Nbit = 4
+    save_dir = '/home/lawson/workspace/BSQ-CS/train_result/0721/cs-res20-AT-W4A4'
     if not os.path.exists(save_dir):
             os.makedirs(save_dir)
             
@@ -491,7 +480,7 @@ if __name__ == '__main__':
     classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 
     #define ResNet18
-    model = ResNet(depth=20,num_classes=10,Nbits=8, act_bit=8,bin=True).to(device)
+    model = ResNet(num_classes=10,Nbits=Nbit, act_bit=4,bin=True).to(device)
     print(model)
 
     #define loss funtion & optimizer
@@ -505,7 +494,7 @@ if __name__ == '__main__':
         sum_loss = 0.0
         correct = 0.0
         total = 0.0
-        min_acc = 0
+        best_acc = 0
         if epoch > 0: model.temp *= temp_increase
         print('Current epoch temp:', model.temp)
         for i, data in enumerate(trainloader, 0):
@@ -549,8 +538,9 @@ if __name__ == '__main__':
 
         #save the model of the best epoch
         best_model_path = os.path.join(*[save_dir, 'model_best.pt'])
-        if test_acc > min_acc:
-            min_val_los = test_acc
+        if test_acc > best_acc:
+            best_acc = test_acc
+            best_epoch = epoch
             # torch.save(model.state_dict(), best_model_path)
             torch.save({
                 'model': model.state_dict(),
@@ -559,4 +549,5 @@ if __name__ == '__main__':
             }, best_model_path)
 
     print('Train has finished, total epoch is %d' % EPOCH)
+    print('Best Accuracy is %.3f%% at Epoch %d' %  (best_acc, best_epoch))
     
