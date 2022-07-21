@@ -488,13 +488,13 @@ if __name__ == '__main__':
     optimizer = optim.SGD(model.parameters(), lr=LR, momentum=0.9, weight_decay=5e-4)
 
     #train
+    best_acc = 0
     for epoch in range(pre_epoch, EPOCH):
         print('\nEpoch: %d' % (epoch + 1))
         model.train()
         sum_loss = 0.0
         correct = 0.0
         total = 0.0
-        best_acc = 0
         if epoch > 0: model.temp *= temp_increase
         print('Current epoch temp:', model.temp)
         for i, data in enumerate(trainloader, 0):
@@ -539,15 +539,15 @@ if __name__ == '__main__':
         #save the model of the best epoch
         best_model_path = os.path.join(*[save_dir, 'model_best.pt'])
         if test_acc > best_acc:
-            best_acc = test_acc
-            best_epoch = epoch
             # torch.save(model.state_dict(), best_model_path)
             torch.save({
                 'model': model.state_dict(),
                 'epoch': epoch,
                 'valid_acc': test_acc,
             }, best_model_path)
-
+            best_acc = test_acc
+            best_epoch = epoch
+            print('Best Accuracy is %.3f%% at Epoch %d' %  (best_acc, best_epoch))
     print('Train has finished, total epoch is %d' % EPOCH)
-    print('Best Accuracy is %.3f%% at Epoch %d' %  (best_acc, best_epoch))
+    
     

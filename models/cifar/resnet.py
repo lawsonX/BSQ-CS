@@ -9,7 +9,7 @@ https://github.com/pytorch/vision/blob/master/torchvision/models/resnet.py
 import torch
 import torch.nn as nn
 import math
-from .bit import BitLinear, BitConv2d
+from bit import BitLinear, BitConv2d
 import numpy as np
 
 
@@ -102,7 +102,7 @@ class BasicBlock(nn.Module):
         out = self.bn1(out)
         out = self.relu1(out)
         
-        out = STE.apply(out,self.act_bit)
+        # out = STE.apply(out,self.act_bit)
 
         out = self.conv2(out)
         out = self.bn2(out)
@@ -113,7 +113,7 @@ class BasicBlock(nn.Module):
         out += residual
         out = self.relu2(out)
         
-        out = STE.apply(out,self.act_bit)
+        # out = STE.apply(out,self.act_bit)
 
         return out
 
@@ -444,3 +444,118 @@ def resnet(**kwargs):
     Constructs a ResNet model.
     """
     return ResNet(**kwargs)
+
+if __name__ == '__main__':
+    import torch.optim as optim
+    import torchvision
+    import torchvision.transforms as transform
+    import os
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    EPOCH = 100
+    pre_epoch = 0
+    BATCH_SIZE = 128
+    LR = 0.01
+    # LMBDA = 1e-8
+    Nbit = 4
+    save_dir = '/home/lawson/workspace/BSQ-CS/train_result/0721/ste-res20-W4'
+    if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
+            
+    # iters_per_reset = EPOCH-1
+    # temp_increase = 200**(1./iters_per_reset)
+
+    #prepare dataset and preprocessing
+    transform_train = transform.Compose([
+        transform.RandomCrop(32, padding=4),
+        transform.RandomHorizontalFlip(),
+        transform.ToTensor(),
+        transform.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
+    ])
+
+    transform_test = transform.Compose([
+        transform.ToTensor(),
+        transform.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
+    ])
+
+    trainset = torchvision.datasets.CIFAR10(root='../data', train=True, download=True, transform=transform_train)
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=BATCH_SIZE, shuffle=True, num_workers=2)
+
+    testset = torchvision.datasets.CIFAR10(root='../data', train=False, download=True, transform=transform_test)
+    testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=2)
+
+    #labels in CIFAR10
+    classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+
+    #define ResNet18
+    model = ResNet(depth=20,num_classes=10,Nbits=Nbit,bin=True).to(device)
+    print(model)
+
+    #define loss funtion & optimizer
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.SGD(model.parameters(), lr=LR, momentum=0.9, weight_decay=5e-4)
+
+    #train
+    best_acc = 0
+    for epoch in range(pre_epoch, EPOCH):
+        print('\nEpoch: %d' % (epoch + 1))
+        model.train()
+        sum_loss = 0.0
+        correct = 0.0
+        total = 0.0
+        # if epoch > 0: model.temp *= temp_increase
+        # print('Current epoch temp:', model.temp)
+        for i, data in enumerate(trainloader, 0):
+            #prepare dataset
+            length = len(trainloader)
+            inputs, labels = data
+            inputs, labels = inputs.to(device), labels.to(device)
+            optimizer.zero_grad()
+            
+            #forward & backward
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            
+            #print ac & loss in each batch
+            sum_loss += loss.item()
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += predicted.eq(labels.data).cpu().sum()
+            train_acc = 100. * correct / total
+            if i % 1000 == 0:
+                print('[epoch:%d, iter:%d] Loss: %.03f | Acc: %.3f%% ' 
+                    % (epoch + 1, (i + 1 + epoch * length), sum_loss / (i + 1), train_acc))
+            
+        #get the ac with testdataset in each epoch
+        print('Waiting Test...')
+        with torch.no_grad():
+            correct = 0
+            total = 0
+            for data in testloader:
+                model.eval()
+                images, labels = data
+                images, labels = images.to(device), labels.to(device)
+                outputs = model(images)
+                _, predicted = torch.max(outputs.data, 1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum()
+                test_acc = (100 * correct / total)
+            print('Test\'s ac is: %.3f%%' % test_acc )
+
+        #save the model of the best epoch
+        best_model_path = os.path.join(*[save_dir, 'model_best.pt'])
+        if test_acc > best_acc:
+            # torch.save(model.state_dict(), best_model_path)
+            torch.save({
+                'model': model.state_dict(),
+                'epoch': epoch,
+                'valid_acc': test_acc,
+            }, best_model_path)
+            best_acc = test_acc
+            best_epoch = epoch
+            print('Best Accuracy is %.3f%% at Epoch %d' %  (best_acc, best_epoch))
+    print('Train has finished, total epoch is %d' % EPOCH)
+    
