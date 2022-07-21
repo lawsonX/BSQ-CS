@@ -215,7 +215,7 @@ class ResNet(nn.Module):
         x = self.layer1(x, self.temp)
         x = self.layer2(x, self.temp)
         x = self.layer3(x, self.temp)
-        x = self.layer4(x, self.temp)
+        # x = self.layer4(x, self.temp)
 
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
@@ -450,7 +450,7 @@ if __name__ == '__main__':
     LR = 0.01
     LMBDA = 1e-8
     Nbit = 4
-    save_dir = '/home/lawson/workspace/BSQ-CS/train_result/0721/cs-res20-AT-W4A4'
+    save_dir = '/home/lawson/workspace/BSQ-CS/train_result/0721/cs-res20-W4'
     if not os.path.exists(save_dir):
             os.makedirs(save_dir)
             
@@ -547,7 +547,7 @@ if __name__ == '__main__':
             }, best_model_path)
             best_acc = test_acc
             best_epoch = epoch
-            print('Best Accuracy is %.3f%% at Epoch %d' %  (best_acc, best_epoch))
-    print('Train has finished, total epoch is %d' % EPOCH)
+        print('Best Accuracy is %.3f%% at Epoch %d' %  (best_acc, best_epoch))
+    print('Train has finished, total epoch is %d' % EPOCH+1)
     
     
