@@ -450,7 +450,7 @@ if __name__ == '__main__':
     LR = 0.01
     LMBDA = 1e-8
     Nbit = 4
-    save_dir = '/home/lawson/workspace/BSQ-CS/train_result/0721/cs-res20-W4'
+    save_dir = 'C:/Users/102/Documents/GitHub/BSQ-CS/train_result/0725/cs-res20'
     if not os.path.exists(save_dir):
             os.makedirs(save_dir)
             

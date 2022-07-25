@@ -458,8 +458,8 @@ if __name__ == '__main__':
     BATCH_SIZE = 128
     LR = 0.01
     # LMBDA = 1e-8
-    Nbit = 4
-    save_dir = '/home/lawson/workspace/BSQ-CS/train_result/0721/ste-res20-W4'
+    Nbit = 8
+    save_dir = 'C:/Users/102/Documents/GitHub/BSQ-CS/train_result/0725/ste-res20-W8'
     if not os.path.exists(save_dir):
             os.makedirs(save_dir)
             

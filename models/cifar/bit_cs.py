@@ -300,8 +300,12 @@ class BitLinear(Module):
     def forward(self, input, temp=1):
         if self.bin:
             dev = self.pweight.device
-            weight = torch.mul((self.pweight-self.nweight), self.exps.to(dev))
-            weight = torch.sigmoid(temp * torch.sum(weight,dim=2))* self.scale
+            pweight = torch.sigmoid(temp * self.pweight)
+            nweight = torch.sigmoid(temp * self.nweight)
+            weight = torch.mul(pweight-nweight, self.exps.to(dev))
+            # import pdb; pdb.set_trace()
+            weight =  torch.sum(weight,dim=2) * self.scale
+            # weight = torch.sigmoid(temp * torch.sum(weight,dim=2))* self.scale
             # weight = bit_STE.apply(torch.sum(weight,dim=2), self.Nbits, self.zero) * self.scale
             if self.pbias is not None:
                 bias = torch.mul((self.pbias-self.nbias), self.bexps.to(dev))
@@ -810,9 +814,15 @@ class BitConv2d(Bit_ConvNd):
     def forward(self, input, temp=1):
         if self.bin:
             dev = self.pweight.device
-            weight = torch.mul((self.pweight-self.nweight), self.exps.to(dev))
-            weight = torch.sigmoid(temp * torch.sum(weight,dim=4))* self.scale
+            pweight = torch.sigmoid(temp * self.pweight)
+            nweight = torch.sigmoid(temp * self.nweight)
+            weight = torch.mul(pweight-nweight, self.exps.to(dev))
             # import pdb; pdb.set_trace()
+            weight =  torch.sum(weight,dim=4) * self.scale
+            # weight = torch.mul(self.pweight-self.nweight, self.exps.to(dev))
+            # import pdb; pdb.set_trace()
+            # weight = torch.sigmoid(temp * torch.sum(weight,dim=4))* self.scale
+            
             # weight = bit_STE.apply(torch.sum(weight,dim=4), self.Nbits, self.zero) * self.scale
             
             if self.pbias is not None:
