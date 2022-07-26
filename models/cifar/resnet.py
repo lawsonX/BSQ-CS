@@ -555,7 +555,7 @@ if __name__ == '__main__':
                 'valid_acc': test_acc,
             }, best_model_path)
             best_acc = test_acc
-            best_epoch = epoch
+            best_epoch = epoch+1
         print('Best Accuracy is %.3f%% at Epoch %d' %  (best_acc, best_epoch))
     print('Train has finished, total epoch is %d' % EPOCH)
     

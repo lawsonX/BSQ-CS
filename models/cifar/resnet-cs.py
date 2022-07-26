@@ -9,7 +9,7 @@ https://github.com/pytorch/vision/blob/master/torchvision/models/resnet.py
 import torch
 import torch.nn as nn
 import math
-from bit_cs import BitLinear, BitConv2d
+from bit_cs_cs import BitLinear, BitConv2d
 import numpy as np
 
 
@@ -191,6 +191,7 @@ class ResNet(nn.Module):
         # self.layer4 = ResStage(64,128,2,1,Nbits,bin=bin)
         self.avgpool = nn.AvgPool2d(8)
         self.fc = BitLinear(64, num_classes, Nbits=Nbits, bin=bin)
+        self.mask_modules = [m for m in self.modules() if type(m) == BitConv2d]
         self.temp = 1
 
         for m in self.modules():
@@ -450,7 +451,7 @@ if __name__ == '__main__':
     LR = 0.01
     LMBDA = 1e-8
     Nbit = 4
-    save_dir = 'C:/Users/102/Documents/GitHub/BSQ-CS/train_result/0725/cs-res20'
+    save_dir = 'C:/Users/102/Documents/GitHub/BSQ-CS/train_result/0726/cscs-res20-analyzLinear'
     if not os.path.exists(save_dir):
             os.makedirs(save_dir)
             
@@ -501,12 +502,16 @@ if __name__ == '__main__':
             #prepare dataset
             length = len(trainloader)
             inputs, labels = data
+    
             inputs, labels = inputs.to(device), labels.to(device)
             optimizer.zero_grad()
             
             #forward & backward
             outputs = model(inputs)
-            loss = criterion(outputs, labels) + LMBDA
+            # import pdb; pdb.set_trace()
+            # masks = [m.mask for m in model.mask_modules]  
+            # entries_sum = sum(m.sum() for m in masks)
+            loss = criterion(outputs, labels) #+ LMBDA * entries_sum
             loss.backward()
             optimizer.step()
             
@@ -546,8 +551,8 @@ if __name__ == '__main__':
                 'valid_acc': test_acc,
             }, best_model_path)
             best_acc = test_acc
-            best_epoch = epoch
+            best_epoch = epoch+1
         print('Best Accuracy is %.3f%% at Epoch %d' %  (best_acc, best_epoch))
-    print('Train has finished, total epoch is %d' % EPOCH+1)
+    print('Train has finished, total epoch is %d' % EPOCH)
     
     
