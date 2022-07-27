@@ -257,7 +257,7 @@ class BitLinear(Module):
                 self.biasscale = None
         else:
             return
-    
+
     def finetune_to_bit(self):  
         self.ft=False
         self.bin = True
@@ -319,13 +319,13 @@ class BitLinear(Module):
             self.mask = self.compute_mask(temp)
             
             # for analye only
-            total_ele = self.mask.numel()
+            # total_ele = self.mask.numel()
             # number of ones
-            ones = (self.mask == 1).sum().item()
+            # ones = (self.mask == 1).sum().item()
             # print('Total element:',total_ele)
-            num_zeros = torch.count_nonzero(self.mask).item()
-            print("Number of None zero element:", num_zeros)
-            print("Number of Ones:", ones)
+            # num_zeros = torch.count_nonzero(self.mask).item()
+            # print("Number of None zero element:", num_zeros)
+            # print("Number of Ones:", ones)
             # print('None Zero Ratio:', num_zeros/total_ele)
 
             masked_weight = weight * self.mask
@@ -482,6 +482,9 @@ class Bit_ConvNd(Module):
         self.ft=False
         self.bin = bin
         self.mask_initial_value = 0.
+        # mask for prune bit
+        self.mask_weight = torch.nn.Parameter(torch.Tensor(out_channels, in_channels // groups, *kernel_size, Nbits))
+        torch.nn.init.constant_(self.mask_weight, self.mask_initial_value)
         if self.bin:
             if transposed:
                 self.pweight = Parameter(torch.Tensor(in_channels, out_channels // groups, *kernel_size, Nbits))
@@ -491,9 +494,6 @@ class Bit_ConvNd(Module):
                 self.pweight = Parameter(torch.Tensor(out_channels, in_channels // groups, *kernel_size, Nbits))
                 self.nweight = Parameter(torch.Tensor(out_channels, in_channels // groups, *kernel_size, Nbits))
                 self.scale = Parameter(torch.Tensor(1))
-                # mask for prune bit
-                self.mask_weight = torch.nn.Parameter(torch.Tensor(out_channels, in_channels // groups, *kernel_size, Nbits))
-                torch.nn.init.constant_(self.mask_weight, self.mask_initial_value)
                 
             if bias:
                 self.pbias = Parameter(torch.Tensor(out_channels, Nbits))
@@ -720,7 +720,7 @@ class Bit_ConvNd(Module):
         total_weight = np.prod(weight.shape)/self.Nbits
         nonz_weight = [np.count_nonzero(weight[...,i])*100 for i in range(self.Nbits)]
         #print(self.scale.data.cpu().numpy())
-        print('Weight: '+np.array2string(nonz_weight/total_weight, separator='%, ', formatter={'float_kind':lambda x: "%6.2f" % x}).strip('[]')+'%')
+        print('Weight: '+ np.array2string(nonz_weight/total_weight, separator='%, ', formatter={'float_kind':lambda x: "%6.2f" % x}).strip('[]')+'%')
         if self.pbias is not None:
             bia = self.pbias.data.cpu().numpy()-self.nbias.data.cpu().numpy()
             total_weight = np.prod(bia.shape)/self.bNbits
@@ -765,8 +765,6 @@ class BitConv2d(Bit_ConvNd):
         super(BitConv2d, self).__init__(
             in_channels, out_channels, kernel_size, stride, padding, dilation,
             False, _pair(0), groups, bias, padding_mode, Nbits, bin)
-    
-    
 
     def compute_mask(self, temp, ticket=False):
         scaling = 1. / sigmoid(self.mask_initial_value)
@@ -848,13 +846,14 @@ class BitConv2d(Bit_ConvNd):
                         self.padding, self.dilation, self.groups)
 
     def forward(self, input, temp=1):
+        self.mask = self.compute_mask(temp)
         if self.bin:
             dev = self.pweight.device
             pweight = torch.sigmoid(temp * self.pweight)  # continuous conversion
             nweight = torch.sigmoid(temp * self.nweight)
             weight = torch.mul(pweight-nweight, self.exps.to(dev))
 
-            self.mask = self.compute_mask(temp)
+            
             masked_weight = weight * self.mask
 
             weight =  torch.sum(masked_weight,dim=4) * self.scale

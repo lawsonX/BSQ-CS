@@ -11,6 +11,7 @@ import torch.nn as nn
 import math
 from bit_cs_cs import BitLinear, BitConv2d
 import numpy as np
+import copy
 
 
 class PACTFunction(torch.autograd.Function):
@@ -157,6 +158,26 @@ class Bottleneck(nn.Module):
 
         return out
 
+class MaskedNet(nn.Module):
+    def __init__(self):
+        super(MaskedNet, self).__init__()
+        self.ticket = False
+
+    def checkpoint(self):
+        for m in self.mask_modules: m.checkpoint()
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d) or isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.Linear):
+                m.checkpoint = copy.deepcopy(m.state_dict())
+
+    def rewind_weights(self):
+        for m in self.mask_modules: m.rewind_weights()
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d) or isinstance(m, nn.BatchNorm2d) or isinstance(m, nn.Linear):
+                m.load_state_dict(m.checkpoint)
+                
+    def prune(self):
+        for m in self.mask_modules: m.prune(self.temp)
+
 class ResStage(nn.Module):
     def __init__(self, in_planes, out_planes, stride, padding, Nbits=4, bin=True, bias=False):
         super(ResStage, self).__init__()
@@ -177,8 +198,7 @@ class ResStage(nn.Module):
         out = self.block3(out, temp)
         return out
 
-class ResNet(nn.Module):
-
+class ResNet(MaskedNet):
     def __init__(self, num_classes=10, Nbits=4, act_bit=4, bin=True):
         super(ResNet, self).__init__()
 
@@ -481,7 +501,7 @@ if __name__ == '__main__':
     classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 
     #define ResNet18
-    model = ResNet(num_classes=10,Nbits=Nbit, act_bit=4,bin=True).to(device)
+    model = ResNet(num_classes=10,Nbits=Nbit, act_bit=4, bin=True).to(device)
     print(model)
 
     #define loss funtion & optimizer
@@ -508,10 +528,9 @@ if __name__ == '__main__':
             
             #forward & backward
             outputs = model(inputs)
-            # import pdb; pdb.set_trace()
-            # masks = [m.mask for m in model.mask_modules]  
-            # entries_sum = sum(m.sum() for m in masks)
-            loss = criterion(outputs, labels) #+ LMBDA * entries_sum
+            masks = [m.mask for m in model.mask_modules]
+            entries_sum = sum(m.sum() for m in masks)
+            loss = criterion(outputs, labels)  + LMBDA * entries_sum # L1 Reg on mask
             loss.backward()
             optimizer.step()
             
