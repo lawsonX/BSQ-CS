@@ -462,6 +462,7 @@ if __name__ == '__main__':
     import torch.optim as optim
     import torchvision
     import torchvision.transforms as transform
+    from torch.utils.tensorboard import SummaryWriter
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -471,9 +472,11 @@ if __name__ == '__main__':
     LR = 0.01
     LMBDA = 1e-8
     Nbit = 4
-    save_dir = 'C:/Users/102/Documents/GitHub/BSQ-CS/train_result/0726/cscs-res20-analyzLinear'
+    save_dir = 'C:/Users/102/Documents/GitHub/BSQ-CS/train_result/0728/cscs-res20-l1reg-W4-2'
     if not os.path.exists(save_dir):
             os.makedirs(save_dir)
+    
+    writer = SummaryWriter(save_dir)
             
     iters_per_reset = EPOCH-1
     temp_increase = 200**(1./iters_per_reset)
@@ -543,6 +546,7 @@ if __name__ == '__main__':
             if i % 1000 == 0:
                 print('[epoch:%d, iter:%d] Loss: %.03f | Acc: %.3f%% ' 
                     % (epoch + 1, (i + 1 + epoch * length), sum_loss / (i + 1), train_acc))
+            writer.add_scalar('train loss', sum_loss / (i + 1), epoch)
             
         #get the ac with testdataset in each epoch
         print('Waiting Test...')

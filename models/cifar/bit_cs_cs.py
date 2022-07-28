@@ -103,7 +103,7 @@ class BitLinear(Module):
         self.zero=False
         self.bzero=False
         self.ft = False
-        self.mask_initial_value = 0.
+        self.mask_initial_value = 0
         if self.bin:
             self.pweight = Parameter(torch.Tensor(out_features, in_features, Nbits))
             self.nweight = Parameter(torch.Tensor(out_features, in_features, Nbits))
@@ -481,7 +481,7 @@ class Bit_ConvNd(Module):
         self.bzero=False
         self.ft=False
         self.bin = bin
-        self.mask_initial_value = 0.
+        self.mask_initial_value = 0
         # mask for prune bit
         self.mask_weight = torch.nn.Parameter(torch.Tensor(out_channels, in_channels // groups, *kernel_size, Nbits))
         torch.nn.init.constant_(self.mask_weight, self.mask_initial_value)
@@ -853,7 +853,7 @@ class BitConv2d(Bit_ConvNd):
             nweight = torch.sigmoid(temp * self.nweight)
             weight = torch.mul(pweight-nweight, self.exps.to(dev))
 
-            
+            # import pdb; pdb.set_trace()
             masked_weight = weight * self.mask
 
             weight =  torch.sum(masked_weight,dim=4) * self.scale
@@ -885,7 +885,7 @@ class BitConv2d(Bit_ConvNd):
             param = torch.cat((self.pbias,self.nbias),0)
             reg += torch.sum(torch.sqrt(1e-8+torch.sum(param**2,0)))
         return reg
-        
+
 if __name__ == '__main__':
     def conv3x3(in_planes, out_planes, stride=1, Nbits=8, bin=True):
         "3x3 convolution with padding"
