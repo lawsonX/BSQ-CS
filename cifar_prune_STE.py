@@ -19,6 +19,7 @@ import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import models.cifar as models
 from models.cifar.bit import BitLinear, BitConv2d
+from models.cifar.resnetcs import ResNet
 
 from utils import Bar, Logger, AverageMeter, accuracy, mkdir_p, savefig
 import util
@@ -76,12 +77,12 @@ parser.add_argument('--model', type=str, default=None,
                     help='log file name')   
                     
 # Architecture
-parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet20',
+parser.add_argument('--arch', '-a', metavar='ARCH', default='resnetcs',
                     choices=model_names,
                     help='model architecture: ' +
                         ' | '.join(model_names) +
                         ' (default: resnet18)')
-parser.add_argument('--depth', type=int, default=29, help='Model depth.')
+parser.add_argument('--depth', type=int, default=20, help='Model depth.')
 parser.add_argument('--block-name', type=str, default='BasicBlock',
                     help='the building block for Resnet and Preresnet: BasicBlock, Bottleneck (default: Basicblock for cifar10/cifar100)')
 parser.add_argument('--cardinality', type=int, default=8, help='Model cardinality (group).')
@@ -186,6 +187,12 @@ def main():
                     act_bit = args.act,
                     bin = args.bin
                 )
+    elif args.arch == 'resnetcs':
+        model = ResNet(
+                    num_classes=num_classes,
+                    Nbits = args.Nbits,
+                    bin = args.bin
+                )
     else:
         model = models.__dict__[args.arch](num_classes=num_classes)
 
@@ -216,7 +223,7 @@ def main():
         test_loss, accuracy = test(testloader, model, criterion, 0, use_cuda)
         print(f'Accuracy: {accuracy:.2f}%')
         
-    Nbit_dict = model.module.pruning(threshold=0.0, drop=True)
+    # Nbit_dict = model.module.pruning(threshold=0.0, drop=True)
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     TP = model.module.total_param()
     title = 'cifar-10-' + args.arch
@@ -251,6 +258,7 @@ def main():
         print('\nEpoch: [%d | %d] LR: %f' % (epoch + 1, args.epochs, lr))
         
         if args.Prun_Int:
+            # import pdb; pdb.set_trace()
             if epoch % args.Prun_Int==0:
                 for name, module in model.named_modules():
                     if isinstance(module, BitConv2d) or isinstance(module, BitLinear):
@@ -350,7 +358,7 @@ def train(trainloader, model, criterion, optimizer, epoch, use_cuda, TP, Comp):
         data_time.update(time.time() - end)
 
         if use_cuda:
-            inputs, targets = inputs.cuda(), targets.cuda(async=True)
+            inputs, targets = inputs.cuda(), targets.cuda()
         inputs, targets = torch.autograd.Variable(inputs), torch.autograd.Variable(targets)
 
         # compute output
@@ -367,7 +375,7 @@ def train(trainloader, model, criterion, optimizer, epoch, use_cuda, TP, Comp):
                         reg = 0.
 
         total_loss = loss+args.decay*reg/TP
-        treg = reg.item()/TP      
+        treg = reg/TP      
 
         # measure accuracy and record loss
         prec1, prec5 = accuracy(outputs.data, targets.data, topk=(1, 5))

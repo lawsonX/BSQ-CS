@@ -9,6 +9,8 @@ from torch.nn import Parameter
 from torch.nn.modules.module import Module
 import torch.nn.functional as F
 
+def sigmoid(x):
+    return float(1./(1.+np.exp(-x)))
 
 ############################################################################################################################################################
 
@@ -101,10 +103,15 @@ class BitLinear(Module):
         self.zero=False
         self.bzero=False
         self.ft = False
+        self.mask_initial_value = 0
+        # init mask to prune bit
+        self.mask_weight = torch.nn.Parameter(torch.Tensor(out_features, in_features, Nbits))
+        torch.nn.init.constant_(self.mask_weight, self.mask_initial_value)
         if self.bin:
             self.pweight = Parameter(torch.Tensor(out_features, in_features, Nbits))
             self.nweight = Parameter(torch.Tensor(out_features, in_features, Nbits))
             self.scale = Parameter(torch.Tensor(1))
+            
             if bias:
                 self.pbias = Parameter(torch.Tensor(out_features, Nbits))
                 self.nbias = Parameter(torch.Tensor(out_features, Nbits))
@@ -132,6 +139,14 @@ class BitLinear(Module):
             self.register_parameter('nbias', None)
             self.register_parameter('biasscale', None)
             
+    def compute_mask(self, temp, ticket):
+        scaling = 1. / sigmoid(self.mask_initial_value)
+        if ticket: (self.mask_weight > 0).float()
+        else: mask = torch.sigmoid(temp * self.mask_weight)
+        return scaling * mask
+   
+    def prune(self, temp):
+        self.mask_weight.data = torch.clamp(temp * self.mask_weight.data, max=self.mask_initial_value)
 
     def reset_parameters(self):
     # For float model
@@ -196,7 +211,6 @@ class BitLinear(Module):
             ini_b = torch.Tensor(self.out_features).uniform_(-stdv, stdv)
             self.ini2bit(ini_b, b=True)
 
-
     def to_bin(self):
         if self.bin:
             return
@@ -247,7 +261,7 @@ class BitLinear(Module):
                 self.biasscale = None
         else:
             return
-    
+
     def finetune_to_bit(self):  
         self.ft=False
         self.bin = True
@@ -298,11 +312,20 @@ class BitLinear(Module):
         else:
             return
 
-    def forward(self, input):
+    def forward(self, input, temp=1, ticket=False):
+        # compute continuous mask
+        self.mask = self.compute_mask(temp,ticket)
+        self.mask_sample = torch.bernoulli(self.mask) # sample from Bernulli distribution to generate discrete value 0 or 1
         if self.bin:
             dev = self.pweight.device
-            weight = torch.mul((self.pweight-self.nweight), self.exps.to(dev))
-            weight = bit_STE.apply(torch.sum(weight,dim=2), self.Nbits, self.zero) * self.scale
+            pweight = torch.sigmoid(temp * self.pweight)
+            nweight = torch.sigmoid(temp * self.nweight)
+            weight = torch.mul(pweight-nweight, self.exps.to(dev))
+
+            masked_weight = weight * self.mask_sample
+
+            weight =  torch.sum(masked_weight,dim=2) * self.scale
+            # weight = bit_STE.apply(torch.sum(weight,dim=2), self.Nbits, self.zero) * self.scale
             if self.pbias is not None:
                 bias = torch.mul((self.pbias-self.nbias), self.bexps.to(dev))
                 bias = bit_STE.apply(torch.sum(bias,dim=1), self.bNbits, self.bzero) * self.biasscale
@@ -452,6 +475,10 @@ class Bit_ConvNd(Module):
         self.bzero=False
         self.ft=False
         self.bin = bin
+        self.mask_initial_value = 0
+        # mask for prune bit
+        self.mask_weight = torch.nn.Parameter(torch.Tensor(out_channels, in_channels // groups, *kernel_size, Nbits))
+        torch.nn.init.constant_(self.mask_weight, self.mask_initial_value)
         if self.bin:
             if transposed:
                 self.pweight = Parameter(torch.Tensor(in_channels, out_channels // groups, *kernel_size, Nbits))
@@ -495,14 +522,15 @@ class Bit_ConvNd(Module):
             self.register_parameter('biasscale', None)
 
     def reset_parameters(self):
+        "used in init when not binary"
         init.kaiming_uniform_(self.weight, a=math.sqrt(5))
         if self.bias is not None:
             fan_in, _ = init._calculate_fan_in_and_fan_out(self.weight)
             bound = 1 / math.sqrt(fan_in)
             init.uniform_(self.bias, -bound, bound)
-            
 
     def ini2bit(self, ini, b=False, ft=False):
+        "used in bin_reset_parameters"
     # For binary model
         if ft:
             S = 1.0
@@ -549,9 +577,11 @@ class Bit_ConvNd(Module):
                 Rn = Rn-torch.floor(Rn/ex)*ex
 
     def bin_reset_parameters(self):
+        "used in init when set binary"
         ini_w = torch.full_like(self.pweight[...,0], 0)
         init.kaiming_uniform_(ini_w, a=math.sqrt(5))
         self.ini2bit(ini_w)
+        # import pdb; pdb.set_trace()
         if self.pbias is not None:
             #stdv = 1. / math.sqrt(self.pweight.size(1))
             fan_in, _ = init._calculate_fan_in_and_fan_out(self.pweight)
@@ -560,6 +590,7 @@ class Bit_ConvNd(Module):
             self.ini2bit(ini_b, b=True)
     
     def to_bin(self):
+        "used to convert fp to binary when load fp model from checkpoint"
         if self.bin:
             return
         else:
@@ -580,7 +611,7 @@ class Bit_ConvNd(Module):
                 self.pweight = Parameter(self.weight.data.new_zeros(self.out_channels, self.in_channels // self.groups, *self.kernel_size, self.Nbits))
                 self.nweight = Parameter(self.weight.data.new_zeros(self.out_channels, self.in_channels // self.groups, *self.kernel_size, self.Nbits))
             self.scale = Parameter(self.weight.data.new_zeros(1))
-            #print(self.weight.data.shape)
+            # print(self.weight.data.shape)
             self.ini2bit(self.weight.data)
             self.weight = None
             if self.bias is not None:
@@ -591,6 +622,7 @@ class Bit_ConvNd(Module):
                 self.bias = None
     
     def to_float(self):
+        "seems not used"
         if self.bin:
             self.bin = False
             self.ft = False
@@ -618,7 +650,8 @@ class Bit_ConvNd(Module):
         else:
             return
             
-    def finetune_to_bit(self):  
+    def finetune_to_bit(self):
+        "used in cifar_finetune.py"  
         self.ft=False
         self.bin = True
         if self.Nbits==0:
@@ -650,6 +683,7 @@ class Bit_ConvNd(Module):
             self.bias = None     
     
     def to_finetune(self):
+        "used in cifar_finetune.py" 
         if self.bin:
             self.bin = False
             self.ft=True
@@ -680,7 +714,7 @@ class Bit_ConvNd(Module):
         total_weight = np.prod(weight.shape)/self.Nbits
         nonz_weight = [np.count_nonzero(weight[...,i])*100 for i in range(self.Nbits)]
         #print(self.scale.data.cpu().numpy())
-        print('Weight: '+np.array2string(nonz_weight/total_weight, separator='%, ', formatter={'float_kind':lambda x: "%6.2f" % x}).strip('[]')+'%')
+        print('Weight: '+ np.array2string(nonz_weight/total_weight, separator='%, ', formatter={'float_kind':lambda x: "%6.2f" % x}).strip('[]')+'%')
         if self.pbias is not None:
             bia = self.pbias.data.cpu().numpy()-self.nbias.data.cpu().numpy()
             total_weight = np.prod(bia.shape)/self.bNbits
@@ -709,13 +743,13 @@ class Bit_ConvNd(Module):
         if not hasattr(self, 'padding_mode'):
             self.padding_mode = 'zeros'
 
-
-
 class BitConv2d(Bit_ConvNd):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1,
                  padding=0, dilation=1, groups=1,
-                 bias=True, padding_mode='zeros', Nbits=8, bin=False):
-        
+                 bias=True, padding_mode='zeros', Nbits=8, bin=True):
+        mask_initial_value = 0.
+        self.mask_initial_value = mask_initial_value
+
         self.total_weight = (in_channels//groups)*out_channels*kernel_size*kernel_size
         self.total_bias = out_channels
         kernel_size = _pair(kernel_size)
@@ -726,14 +760,21 @@ class BitConv2d(Bit_ConvNd):
             in_channels, out_channels, kernel_size, stride, padding, dilation,
             False, _pair(0), groups, bias, padding_mode, Nbits, bin)
 
+    def compute_mask(self, temp, ticket):
+        scaling = 1. / sigmoid(self.mask_initial_value)
+        if ticket: (self.mask_weight > 0).float()
+        else: mask = torch.sigmoid(temp * self.mask_weight)
+        return scaling * mask
+
+    def prune(self, temp):
+        self.mask_weight.data = torch.clamp(temp * self.mask_weight.data, max=self.mask_initial_value)
+
     def quant(self, maxbit=10):
     # For binary model
         ## Re-quantize the binary part of the weight, keep scale unchanged
         
-        # dev = self.pweight.device
-        dev = 'cuda'
+        dev = self.pweight.device
         ## Quantize weight
-        import pdb; pdb.set_trace()
         weight = torch.mul((self.pweight-self.nweight), self.exps.to(dev))
         weight = torch.sum(weight,dim=4)
         inip = torch.where(weight > 0, weight, torch.full_like(weight, 0))
@@ -801,11 +842,20 @@ class BitConv2d(Bit_ConvNd):
         return F.conv2d(input, weight, bias, self.stride,
                         self.padding, self.dilation, self.groups)
 
-    def forward(self, input):
+    def forward(self, input, temp=1, ticket=False):
+        self.mask = self.compute_mask(temp, ticket)
+        self.mask_sample = torch.bernoulli(self.mask) # sample from Bernulli distribution to generate discrete value 0 or 1
         if self.bin:
             dev = self.pweight.device
-            weight = torch.mul((self.pweight-self.nweight), self.exps.to(dev))
-            weight = bit_STE.apply(torch.sum(weight,dim=4), self.Nbits, self.zero) * self.scale
+            pweight = torch.sigmoid(temp * self.pweight)  # continuous conversion
+            nweight = torch.sigmoid(temp * self.nweight)
+            weight = torch.mul(pweight-nweight, self.exps.to(dev))
+            # import pdb; pdb.set_trace()
+            masked_weight = weight * self.mask_sample
+
+            weight =  torch.sum(masked_weight,dim=4) * self.scale
+            # weight = bit_STE.apply(torch.sum(weight,dim=4), self.Nbits, self.zero) * self.scale
+
             if self.pbias is not None:
                 bias = torch.mul((self.pbias-self.nbias), self.bexps.to(dev))
                 bias = bit_STE.apply(torch.sum(bias,dim=1), self.bNbits, self.bzero) * self.biasscale
@@ -831,10 +881,14 @@ class BitConv2d(Bit_ConvNd):
             param = torch.cat((self.pbias,self.nbias),0)
             reg += torch.sum(torch.sqrt(1e-8+torch.sum(param**2,0)))
         return reg
-         
+
+if __name__ == '__main__':
+    def conv3x3(in_planes, out_planes, stride=1, Nbits=8, bin=True):
+        "3x3 convolution with padding"
+        return BitConv2d(in_planes, out_planes, kernel_size=3, stride=stride,
+                        padding=1, bias=False, Nbits = Nbits, bin=bin)
     
-        
-        
-        
-        
-        
+    x = torch.randn(64,3,224,224)
+    model = conv3x3(3, 64, 1, Nbits=4, bin=True)
+    out = model(x)
+    # print(out)
