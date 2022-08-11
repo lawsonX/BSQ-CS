@@ -11,6 +11,8 @@ import numpy as np
 import random
 from models.cifar.resnetcs import ResNet
 from torch.utils.tensorboard import SummaryWriter
+import logging
+
 
 parser = argparse.ArgumentParser(description='Training a ResNet on CIFAR-10 with Continuous Sparsification')
 # parser.add_argument('--which-gpu', type=int, default=0, help='which GPU to use')
@@ -25,9 +27,35 @@ parser.add_argument('--decay', type=float, default=5e-4, help='weight decay (def
 parser.add_argument('--lmbda', type=float, default=1e-8, help='lambda for L1 mask regularization (default: 1e-8)')
 parser.add_argument('--final-temp', type=float, default=200, help='temperature at the end of each round (default: 200)')
 # parser.add_argument('--mask-initial-value', type=float, default=0., help='initial value for mask parameters')
-parser.add_argument('--save_dir', type=str, default='train_result/0804/withoutL1norm', help='save path of weight and log files')
+parser.add_argument('--save_dir', type=str, default='train_result/0811/test', help='save path of weight and log files')
+parser.add_argument('--log_file', type=str, default='train.log', help='save path of weight and log files')
 args = parser.parse_args()
 
+def count_ones(mask_sample):
+    ones = 0
+    for i in range(len(mask_sample)):
+        o = (mask_sample[i] == 1).sum().item()
+        total_ele += t
+        ones += o
+    return ones
+
+def get_logger(filename, verbosity=1, name=None):
+    level_dict = {0: logging.DEBUG, 1: logging.INFO, 2: logging.WARNING}
+    formatter = logging.Formatter(
+        "[%(asctime)s][%(filename)s][line:%(lineno)d][%(levelname)s] %(message)s"
+    )
+    logger = logging.getLogger(name)
+    logger.setLevel(level_dict[verbosity])
+ 
+    fh = logging.FileHandler(filename, "w")
+    fh.setFormatter(formatter)
+    logger.addHandler(fh)
+ 
+    sh = logging.StreamHandler()
+    sh.setFormatter(formatter)
+    logger.addHandler(sh)
+ 
+    return logger
 
 if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -35,6 +63,9 @@ if __name__ == '__main__':
             os.makedirs(args.save_dir)
 
     writer = SummaryWriter(args.save_dir)
+
+    train_log_filepath = os.path.join(args.save_dir, args.log_file)
+    logger = get_logger(train_log_filepath)
             
     iters_per_reset = args.epochs-1
     temp_increase = args.final_temp**(1./iters_per_reset)
@@ -67,14 +98,16 @@ if __name__ == '__main__':
         Nbits=args.Nbits, 
         bin=True
         ).to(device)
-    print(model)
+    logger.info(model)
 
     #define loss funtion & optimizer
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs, eta_min=0, last_epoch=-1)
+    TP = model.total_param()
 
     #train
+    logger.info('start training!')
     best_acc = 0
     for epoch in range(0, args.epochs):
         print('\nEpoch: %d' % (epoch + 1))
@@ -82,9 +115,10 @@ if __name__ == '__main__':
         sum_loss = 0.0
         correct = 0.0
         total = 0.0
-        if epoch > 0: model.temp *= temp_increase
-        print('Current epoch temp:', model.temp)
-        print('current learning rate:', optimizer.param_groups[0]['lr'])
+        if epoch > 0: model.temp *= temp_increase 
+        logger.info('Current epoch temp:', model.temp)
+        # print('Current epoch temp:', model.temp_s)
+        logger.info('current learning rate:', optimizer.param_groups[0]['lr'])
         # print('Ratio of ones in mask', ratio_one)
 
         for i, data in enumerate(trainloader, 0):
@@ -98,7 +132,7 @@ if __name__ == '__main__':
             #forward & backward
             outputs = model(inputs)
             masks = [m.mask for m in model.mask_modules]
-            mask_sample = [m.mask_sample for m in model.mask_modules]
+            mask_sample = [m.mask_discrete for m in model.mask_modules]
 
             # for analyze only
             total_ele = 0
@@ -113,7 +147,8 @@ if __name__ == '__main__':
             writer.add_scalar('Ratio of ones in bit mask', ratio_one, epoch)
 
             entries_sum = sum(m.sum() for m in masks)
-            loss = criterion(outputs, labels)  #+ args.lmbda * entries_sum # L1 Reg on mask
+            loss = criterion(outputs, labels)  + args.lmbda * entries_sum/TP # L1 Reg on mask
+            treg = entries_sum/TP
             loss.backward()
             optimizer.step()
             scheduler.step()
@@ -124,12 +159,16 @@ if __name__ == '__main__':
             total += labels.size(0)
             correct += predicted.eq(labels.data).cpu().sum()
             train_acc = 100. * correct / total
-            if i % 1000 == 0:
-                print('[epoch:%d, iter:%d] Loss: %.03f | Acc: %.3f%% ' 
-                    % (epoch + 1, (i + 1 + epoch * length), sum_loss / (i + 1), train_acc))
+            if i % 100 == 0:
+                # print('[epoch:%d, iter:%d] Loss: %.03f | Acc: %.3f%% ' 
+                #     % (epoch + 1, (i + 1 + epoch * length), sum_loss / (i + 1), train_acc))
+                logger.info('Epoch:[{}]\t loss={:.5f}\t acc={:.3f}'.format(epoch+1 , sum_loss / (i + 1), train_acc ))
             writer.add_scalar('train loss', sum_loss / (i + 1), epoch)
+            
+            # writer.add_scalar('Reg loss', treg, epoch)
+
         #get the ac with testdataset in each epoch
-        print('Waiting Test...')
+        logger.info('Waiting Test...')
         with torch.no_grad():
             correct = 0
             total = 0
@@ -142,7 +181,7 @@ if __name__ == '__main__':
                 total += labels.size(0)
                 correct += (predicted == labels).sum()
                 test_acc = (100 * correct / total)
-            print('Test\'s ac is: %.3f%%' % test_acc )
+            logger.info('Test\'s ac is: %.3f%%' % test_acc )
 
         #save the model of the best epoch
         best_model_path = os.path.join(*[args.save_dir, 'model_best.pt'])
@@ -155,6 +194,7 @@ if __name__ == '__main__':
             }, best_model_path)
             best_acc = test_acc
             best_epoch = epoch+1
-        print('Best Accuracy is %.3f%% at Epoch %d' %  (best_acc, best_epoch))
-    print('Train has finished, weight and log saved at ', args.save_dir)
-    
+        logger.info('Best Accuracy is %.3f%% at Epoch %d' %  (best_acc, best_epoch))
+    TP = model.total_param()
+    logger.info('Train has finished, weight and log saved at ', args.save_dir)
+    logger.info('model size is:', str(TP))

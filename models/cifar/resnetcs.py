@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 import math
 from .bitcs import BitLinear, BitConv2d
+# from .bitcss import BitLinear, BitConv2d
 import numpy as np
 import copy
 
@@ -237,10 +238,10 @@ class ResNet(MaskedNet):
         x = self.layer2(x, self.temp, self.ticket)
         x = self.layer3(x, self.temp, self.ticket)
         # x = self.layer4(x, self.temp)
-
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
         x = self.fc(x)
+
 
         return x
     
@@ -523,6 +524,7 @@ if __name__ == '__main__':
         sum_loss = 0.0
         correct = 0.0
         total = 0.0
+
         if epoch > 0: model.temp *= temp_increase
         print('Current epoch temp:', model.temp)
         print('current learning rate:', optimizer.param_groups[0]['lr'])
