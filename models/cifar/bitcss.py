@@ -107,7 +107,7 @@ class BitLinear(Module):
         # init mask to prune bit
         self.mask_weight = torch.nn.Parameter(torch.Tensor(out_features, in_features, Nbits))
         torch.nn.init.constant_(self.mask_weight, self.mask_initial_value)
-        self.mask_discrete = torch.ones_like(self.mask_weight).cuda()
+        # self.mask_discrete = torch.ones_like(self.mask_weight).cuda()
         # torch.nn.init.constant_(self.mask_discrete, 1)
         if self.bin:
             self.pweight = Parameter(torch.Tensor(out_features, in_features, Nbits))
@@ -146,9 +146,9 @@ class BitLinear(Module):
         if ticket: 
             (self.mask_weight > 0).float()
         else: 
-            mask_cs_tmp = torch.sigmoid(temp_s * self.mask_weight)
-            mask = torch.where(self.mask_discrete==1, mask_cs_tmp, self.mask_weight)
-            # mask = torch.sigmoid(temp_s * self.mask_weight)
+            # mask_cs_tmp = torch.sigmoid(temp_s * self.mask_weight)
+            # mask = torch.where(self.mask_discrete==1, mask_cs_tmp, self.mask_weight)
+            mask = torch.sigmoid(temp_s * self.mask_weight)
         return scaling * mask
    
     def prune(self, temp):
@@ -775,9 +775,9 @@ class BitConv2d(Bit_ConvNd):
             (self.mask_weight > 0).float()
         # else: mask = torch.sigmoid(temp_s * self.mask_weight)
         else:
-            mask_cs_tmp = torch.sigmoid(temp_s * self.mask_weight)
-            mask = torch.where(self.mask_discrete==1, mask_cs_tmp, self.mask_weight).cuda()
-            # mask = torch.sigmoid(temp_s * self.mask_weight)
+            # mask_cs_tmp = torch.sigmoid(temp_s * self.mask_weight)
+            # mask = torch.where(self.mask_discrete==1, mask_cs_tmp, self.mask_weight).cuda()
+            mask = torch.sigmoid(temp_s * self.mask_weight)
         return scaling * mask
 
     def prune(self, temp):
