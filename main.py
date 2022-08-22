@@ -13,31 +13,24 @@ from models.cifar.resnetcs import ResNet
 from torch.utils.tensorboard import SummaryWriter
 import logging
 
-
+# os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 parser = argparse.ArgumentParser(description='Training a ResNet on CIFAR-10 with Continuous Sparsification')
 # parser.add_argument('--which-gpu', type=int, default=0, help='which GPU to use')
 parser.add_argument('--batch-size', type=int, default=512, metavar='N', help='input batch size for training/val/test (default: 128)')
 parser.add_argument('--epochs', type=int, default=300, help='number of epochs to train (default: 85)')
 parser.add_argument('--class', type=int, default=10, help='class of output')
-parser.add_argument('--Nbits', type=int, default=8, help='quantization bitwidth for weight')
+parser.add_argument('--Nbits', type=int, default=4, help='quantization bitwidth for weight')
 # parser.add_argument('--act_bit', type=int, default=4, help='quantization bitwidth for activation')
-parser.add_argument('--lr', type=float, default=0.1, metavar='LR', help='learning rate (default: 0.1)')
+parser.add_argument('--lr', type=float, default=0.01, metavar='LR', help='learning rate (default: 0.1)')
 parser.add_argument('--workers', type=int, default=4, help='number of data loading workers (default: 2)')
 parser.add_argument('--decay', type=float, default=5e-4, help='weight decay (default: 5e-4)')
 parser.add_argument('--lmbda', type=float, default=1e-8, help='lambda for L1 mask regularization (default: 1e-8)')
 parser.add_argument('--final-temp', type=float, default=200, help='temperature at the end of each round (default: 200)')
 # parser.add_argument('--mask-initial-value', type=float, default=0., help='initial value for mask parameters')
-parser.add_argument('--save_dir', type=str, default='train_result/0811/test', help='save path of weight and log files')
+parser.add_argument('--save_dir', type=str, default='train_result/0822/newMask_N4_l1reg_lr001', help='save path of weight and log files')
 parser.add_argument('--log_file', type=str, default='train.log', help='save path of weight and log files')
 args = parser.parse_args()
 
-def count_ones(mask_sample):
-    ones = 0
-    for i in range(len(mask_sample)):
-        o = (mask_sample[i] == 1).sum().item()
-        total_ele += t
-        ones += o
-    return ones
 
 def get_logger(filename, verbosity=1, name=None):
     level_dict = {0: logging.DEBUG, 1: logging.INFO, 2: logging.WARNING}
@@ -115,10 +108,11 @@ if __name__ == '__main__':
         sum_loss = 0.0
         correct = 0.0
         total = 0.0
-        if epoch > 0: model.temp *= temp_increase 
-        logger.info('Current epoch temp:', model.temp)
+        if epoch > 0: model.temp *= temp_increase
+        model.epoch = epoch
+        print('Current epoch temp:', model.temp)
         # print('Current epoch temp:', model.temp_s)
-        logger.info('current learning rate:', optimizer.param_groups[0]['lr'])
+        # logger.info('current learning rate:', optimizer.param_groups[0]['lr'])
         # print('Ratio of ones in mask', ratio_one)
 
         for i, data in enumerate(trainloader, 0):
@@ -133,6 +127,7 @@ if __name__ == '__main__':
             outputs = model(inputs)
             masks = [m.mask for m in model.mask_modules]
             mask_sample = [m.mask_discrete for m in model.mask_modules]
+            # import pdb; pdb.set_trace()
 
             # for analyze only
             total_ele = 0
@@ -144,11 +139,13 @@ if __name__ == '__main__':
                 total_ele += t
                 ones += o
             ratio_one = ones/total_ele
+            print('total element:', total_ele, '    ones:',ones)
             writer.add_scalar('Ratio of ones in bit mask', ratio_one, epoch)
+            # logger.info('Ratio of ones in bit mask', ratio_one)
 
             entries_sum = sum(m.sum() for m in masks)
-            loss = criterion(outputs, labels)  + args.lmbda * entries_sum/TP # L1 Reg on mask
-            treg = entries_sum/TP
+            loss = criterion(outputs, labels)  + args.lmbda * entries_sum #/TP # L1 Reg on mask
+            # treg = entries_sum/TP
             loss.backward()
             optimizer.step()
             scheduler.step()

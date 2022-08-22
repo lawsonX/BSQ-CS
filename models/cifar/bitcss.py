@@ -103,12 +103,10 @@ class BitLinear(Module):
         self.zero=False
         self.bzero=False
         self.ft = False
-        self.mask_initial_value = 0
+        self.mask_initial_value = 1
         # init mask to prune bit
-        self.mask_weight = torch.nn.Parameter(torch.Tensor(out_features, in_features, Nbits))
+        self.mask_weight = torch.nn.Parameter(torch.Tensor(Nbits))
         torch.nn.init.constant_(self.mask_weight, self.mask_initial_value)
-        # self.mask_discrete = torch.ones_like(self.mask_weight).cuda()
-        # torch.nn.init.constant_(self.mask_discrete, 1)
         if self.bin:
             self.pweight = Parameter(torch.Tensor(out_features, in_features, Nbits))
             self.nweight = Parameter(torch.Tensor(out_features, in_features, Nbits))
@@ -141,14 +139,9 @@ class BitLinear(Module):
             self.register_parameter('nbias', None)
             self.register_parameter('biasscale', None)
             
-    def compute_mask(self, temp_s, ticket):
+    def compute_mask(self, temp_s):
         scaling = 1. / sigmoid(self.mask_initial_value)
-        if ticket: 
-            (self.mask_weight > 0).float()
-        else: 
-            # mask_cs_tmp = torch.sigmoid(temp_s * self.mask_weight)
-            # mask = torch.where(self.mask_discrete==1, mask_cs_tmp, self.mask_weight)
-            mask = torch.sigmoid(temp_s * self.mask_weight)
+        mask = torch.sigmoid(temp_s * self.mask_weight)
         return scaling * mask
    
     def prune(self, temp):
@@ -318,9 +311,9 @@ class BitLinear(Module):
         else:
             return
 
-    def forward(self, input, temp=1, temp_s=1, ticket=False):
+    def forward(self, input, temp=1):
         # compute continuous mask
-        self.mask = self.compute_mask(temp,ticket)
+        self.mask = self.compute_mask(temp)
         self.mask_discrete = torch.bernoulli(self.mask) # sample from Bernulli distribution to generate discrete value 0 or 1
 
         if self.bin:
@@ -330,9 +323,11 @@ class BitLinear(Module):
             weight = torch.mul(pweight-nweight, self.exps.to(dev))
 
             masked_weight = weight * self.mask_discrete
-
             weight =  torch.sum(masked_weight,dim=2) * self.scale
+
+
             # weight = bit_STE.apply(torch.sum(weight,dim=2), self.Nbits, self.zero) * self.scale
+
             if self.pbias is not None:
                 bias = torch.mul((self.pbias-self.nbias), self.bexps.to(dev))
                 bias = bit_STE.apply(torch.sum(bias,dim=1), self.bNbits, self.bzero) * self.biasscale
@@ -457,7 +452,7 @@ class Bit_ConvNd(Module):
 
     def __init__(self, in_channels, out_channels, kernel_size, stride,
                  padding, dilation, transposed, output_padding,
-                 groups, bias, padding_mode, Nbits=8, bin=False):
+                 groups, bias, padding_mode, Nbits=8, bin=True):
         super(Bit_ConvNd, self).__init__()
         if in_channels % groups != 0:
             raise ValueError('in_channels must be divisible by groups')
@@ -482,12 +477,10 @@ class Bit_ConvNd(Module):
         self.bzero=False
         self.ft=False
         self.bin = bin
-        self.mask_initial_value = 0.
+        self.mask_initial_value = 1
         # mask for prune bit
-        self.mask_weight = torch.nn.Parameter(torch.Tensor(out_channels, in_channels // groups, *kernel_size, Nbits))
+        self.mask_weight = torch.nn.Parameter(torch.Tensor(Nbits))
         torch.nn.init.constant_(self.mask_weight, self.mask_initial_value)
-        self.mask_discrete = torch.ones_like(self.mask_weight).cuda()
-        # torch.nn.init.constant_(self.mask_discrete, 1)
         if self.bin:
             if transposed:
                 self.pweight = Parameter(torch.Tensor(in_channels, out_channels // groups, *kernel_size, Nbits))
@@ -756,8 +749,8 @@ class BitConv2d(Bit_ConvNd):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1,
                  padding=0, dilation=1, groups=1,
                  bias=True, padding_mode='zeros', Nbits=8, bin=True):
-        mask_initial_value = 0.
-        self.mask_initial_value = mask_initial_value
+
+        self.mask_initial_value = 1
 
         self.total_weight = (in_channels//groups)*out_channels*kernel_size*kernel_size
         self.total_bias = out_channels
@@ -769,15 +762,9 @@ class BitConv2d(Bit_ConvNd):
             in_channels, out_channels, kernel_size, stride, padding, dilation,
             False, _pair(0), groups, bias, padding_mode, Nbits, bin)
 
-    def compute_mask(self, temp_s, ticket):
+    def compute_mask(self, temp_s):
         scaling = 1. / sigmoid(self.mask_initial_value)
-        if ticket: 
-            (self.mask_weight > 0).float()
-        # else: mask = torch.sigmoid(temp_s * self.mask_weight)
-        else:
-            # mask_cs_tmp = torch.sigmoid(temp_s * self.mask_weight)
-            # mask = torch.where(self.mask_discrete==1, mask_cs_tmp, self.mask_weight).cuda()
-            mask = torch.sigmoid(temp_s * self.mask_weight)
+        mask = torch.sigmoid(temp_s * self.mask_weight)
         return scaling * mask
 
     def prune(self, temp):
@@ -856,11 +843,11 @@ class BitConv2d(Bit_ConvNd):
         return F.conv2d(input, weight, bias, self.stride,
                         self.padding, self.dilation, self.groups)
 
-    def forward(self, input, temp=1, temp_s=1, ticket=False):
-        self.mask = self.compute_mask(temp, ticket)
-        # import pdb; pdb.set_trace()
+    def forward(self, input, temp=1):
+        self.mask = self.compute_mask(temp)
         self.mask_discrete = torch.bernoulli(self.mask) # sample from Bernulli distribution to generate discrete value 0 or 1
         if self.bin:
+            # import pdb; pdb.set_trace()
             dev = self.pweight.device
             pweight = torch.sigmoid(temp * self.pweight)  # continuous conversion
             nweight = torch.sigmoid(temp * self.nweight)
@@ -868,7 +855,6 @@ class BitConv2d(Bit_ConvNd):
             masked_weight = weight * self.mask_discrete
 
             weight =  torch.sum(masked_weight,dim=4) * self.scale
-            # weight = bit_STE.apply(torch.sum(weight,dim=4), self.Nbits, self.zero) * self.scale
 
             if self.pbias is not None:
                 bias = torch.mul((self.pbias-self.nbias), self.bexps.to(dev))
