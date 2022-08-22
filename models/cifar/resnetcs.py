@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import math
 # from .bitcs import BitLinear, BitConv2d
-from .bitcss import BitLinear, BitConv2d
+from .bitcsss import BitLinear, BitConv2d
 import numpy as np
 import copy
 
@@ -213,6 +213,7 @@ class ResNet(MaskedNet):
         self.fc = BitLinear(64, out_features=num_classes, Nbits=Nbits, bin=bin)
         self.mask_modules = [m for m in self.modules() if type(m) in [BitConv2d, BitLinear] ]
         self.temp = 1
+        self.temp_s = torch.empty(Nbits).cuda()
 
         for m in self.modules():
             if isinstance(m, BitConv2d):
@@ -457,145 +458,5 @@ def resnet(**kwargs):
     Constructs a ResNet model.
     """
     return ResNet(**kwargs)
-
-if __name__ == '__main__':
-    import os
-    import torch.optim as optim
-    import torchvision
-    import torchvision.transforms as transform
-    from torch.utils.tensorboard import SummaryWriter
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    EPOCH = 600
-    pre_epoch = 0
-    BATCH_SIZE = 512
-    LR = 0.1
-    gamma = 0.1
-    LMBDA = 1e-8
-    Nbit = 4
-    save_dir = 'C:/Users/102/Documents/GitHub/BSQ-CS/train_result/0803/ep600-lr01'
-    if not os.path.exists(save_dir):
-            os.makedirs(save_dir)
-    
-    writer = SummaryWriter(save_dir)
-            
-    iters_per_reset = EPOCH-1
-    temp_increase = 200**(1./iters_per_reset)
-
-    #prepare dataset and preprocessing
-    transform_train = transform.Compose([
-        transform.RandomCrop(32, padding=4),
-        transform.RandomHorizontalFlip(),
-        transform.ToTensor(),
-        transform.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
-    ])
-
-    transform_test = transform.Compose([
-        transform.ToTensor(),
-        transform.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))
-    ])
-
-    trainset = torchvision.datasets.CIFAR10(root='../data', train=True, download=True, transform=transform_train)
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=BATCH_SIZE, shuffle=True, num_workers=2)
-
-    testset = torchvision.datasets.CIFAR10(root='../data', train=False, download=True, transform=transform_test)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=2)
-
-    #labels in CIFAR10
-    classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
-
-    #define ResNet20
-    model = ResNet(num_classes=10,Nbits=Nbit, bin=True).to(device)
-    print(model)
-
-    #define loss funtion & optimizer
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=LR, momentum=0.9, weight_decay=5e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, EPOCH, eta_min=0, last_epoch=-1)
-
-    #train
-    best_acc = 0
-    for epoch in range(pre_epoch, EPOCH):
-        print('\nEpoch: %d' % (epoch + 1))
-        model.train()
-        sum_loss = 0.0
-        correct = 0.0
-        total = 0.0
-
-        if epoch > 0: model.temp *= temp_increase
-        print('Current epoch temp:', model.temp)
-        print('current learning rate:', optimizer.param_groups[0]['lr'])
-        # print('Ratio of ones in mask', ratio_one)
-
-        for i, data in enumerate(trainloader, 0):
-            #prepare dataset
-            length = len(trainloader)
-            inputs, labels = data
-    
-            inputs, labels = inputs.to(device), labels.to(device)
-            optimizer.zero_grad()
-            
-            #forward & backward
-            outputs = model(inputs)
-            masks = [m.mask for m in model.mask_modules]
-            mask_sample = [m.mask_sample for m in model.mask_modules]
-
-            # for analyze only
-            total_ele = 0
-            ones = 0
-            for iter in range(len(mask_sample)):
-                t = mask_sample[iter].numel()
-                o = (mask_sample[iter] == 1).sum().item()
-                total_ele += t
-                ones += o
-            ratio_one = ones/total_ele
-            writer.add_scalar('Ratio of ones in mask', ratio_one, epoch)
-
-            entries_sum = sum(m.sum() for m in masks)
-            loss = criterion(outputs, labels)  + LMBDA * entries_sum # L1 Reg on mask
-            loss.backward()
-            optimizer.step()
-            scheduler.step()
-            
-            #print ac & loss in each batch
-            sum_loss += loss.item()
-            _, predicted = torch.max(outputs.data, 1)
-            total += labels.size(0)
-            correct += predicted.eq(labels.data).cpu().sum()
-            train_acc = 100. * correct / total
-            if i % 1000 == 0:
-                print('[epoch:%d, iter:%d] Loss: %.03f | Acc: %.3f%% ' 
-                    % (epoch + 1, (i + 1 + epoch * length), sum_loss / (i + 1), train_acc))
-            writer.add_scalar('train loss', sum_loss / (i + 1), epoch)
-        #get the ac with testdataset in each epoch
-        print('Waiting Test...')
-        with torch.no_grad():
-            correct = 0
-            total = 0
-            for data in testloader:
-                model.eval()
-                images, labels = data
-                images, labels = images.to(device), labels.to(device)
-                outputs = model(images)
-                _, predicted = torch.max(outputs.data, 1)
-                total += labels.size(0)
-                correct += (predicted == labels).sum()
-                test_acc = (100 * correct / total)
-            print('Test\'s ac is: %.3f%%' % test_acc )
-
-        #save the model of the best epoch
-        best_model_path = os.path.join(*[save_dir, 'model_best.pt'])
-        if test_acc > best_acc:
-            # torch.save(model.state_dict(), best_model_path)
-            torch.save({
-                'model': model.state_dict(),
-                'epoch': epoch,
-                'valid_acc': test_acc,
-            }, best_model_path)
-            best_acc = test_acc
-            best_epoch = epoch+1
-        print('Best Accuracy is %.3f%% at Epoch %d' %  (best_acc, best_epoch))
-    print('Train has finished, weight and log saved at', save_dir)
     
     
