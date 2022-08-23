@@ -13,21 +13,21 @@ from models.cifar.resnetcs import ResNet
 from torch.utils.tensorboard import SummaryWriter
 import logging
 
-# os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 parser = argparse.ArgumentParser(description='Training a ResNet on CIFAR-10 with Continuous Sparsification')
 # parser.add_argument('--which-gpu', type=int, default=0, help='which GPU to use')
 parser.add_argument('--batch-size', type=int, default=512, metavar='N', help='input batch size for training/val/test (default: 128)')
-parser.add_argument('--epochs', type=int, default=300, help='number of epochs to train (default: 85)')
+parser.add_argument('--epochs', type=int, default=300, help='number of epochs to train (default: 300)')
 parser.add_argument('--class', type=int, default=10, help='class of output')
 parser.add_argument('--Nbits', type=int, default=4, help='quantization bitwidth for weight')
 # parser.add_argument('--act_bit', type=int, default=4, help='quantization bitwidth for activation')
-parser.add_argument('--lr', type=float, default=0.01, metavar='LR', help='learning rate (default: 0.1)')
+parser.add_argument('--lr', type=float, default=0.05, metavar='LR', help='learning rate (default: 0.1)')
 parser.add_argument('--workers', type=int, default=4, help='number of data loading workers (default: 2)')
 parser.add_argument('--decay', type=float, default=5e-4, help='weight decay (default: 5e-4)')
 parser.add_argument('--lmbda', type=float, default=1e-8, help='lambda for L1 mask regularization (default: 1e-8)')
 parser.add_argument('--final-temp', type=float, default=200, help='temperature at the end of each round (default: 200)')
 # parser.add_argument('--mask-initial-value', type=float, default=0., help='initial value for mask parameters')
-parser.add_argument('--save_dir', type=str, default='train_result/0822/newMask_N4_l1reg_lr001', help='save path of weight and log files')
+parser.add_argument('--save_dir', type=str, default='train_result/0823/temp_s_Nbit8', help='save path of weight and log files')
 parser.add_argument('--log_file', type=str, default='train.log', help='save path of weight and log files')
 args = parser.parse_args()
 
@@ -102,6 +102,7 @@ if __name__ == '__main__':
     #train
     logger.info('start training!')
     best_acc = 0
+    # temp_increase_s = 1
     for epoch in range(0, args.epochs):
         print('\nEpoch: %d' % (epoch + 1))
         model.train()
@@ -109,11 +110,7 @@ if __name__ == '__main__':
         correct = 0.0
         total = 0.0
         if epoch > 0: model.temp *= temp_increase
-        model.epoch = epoch
         print('Current epoch temp:', model.temp)
-        # print('Current epoch temp:', model.temp_s)
-        # logger.info('current learning rate:', optimizer.param_groups[0]['lr'])
-        # print('Ratio of ones in mask', ratio_one)
 
         for i, data in enumerate(trainloader, 0):
             #prepare dataset
@@ -125,23 +122,23 @@ if __name__ == '__main__':
             
             #forward & backward
             outputs = model(inputs)
+
             masks = [m.mask for m in model.mask_modules]
-            mask_sample = [m.mask_discrete for m in model.mask_modules]
-            # import pdb; pdb.set_trace()
+            mask_discrete = [m.mask_discrete for m in model.mask_modules]
 
             # for analyze only
             total_ele = 0
             ones = 0
-            for iter in range(len(mask_sample)):
-                t = mask_sample[iter].numel()
-                o = (mask_sample[iter] == 1).sum().item()
-                z = (mask_sample[iter] == 0).sum().item()
+            for iter in range(len(mask_discrete)):
+                t = mask_discrete[iter].numel()
+                o = (mask_discrete[iter] == 1).sum().item()
+                z = (mask_discrete[iter] == 0).sum().item()
                 total_ele += t
                 ones += o
             ratio_one = ones/total_ele
-            print('total element:', total_ele, '    ones:',ones)
+            # print('total element:', total_ele, '    ones:',ones)
             writer.add_scalar('Ratio of ones in bit mask', ratio_one, epoch)
-            # logger.info('Ratio of ones in bit mask', ratio_one)
+            logger.info('Ratio of ones in bit mask', str(ratio_one))
 
             entries_sum = sum(m.sum() for m in masks)
             loss = criterion(outputs, labels)  + args.lmbda * entries_sum #/TP # L1 Reg on mask
@@ -161,8 +158,8 @@ if __name__ == '__main__':
                 #     % (epoch + 1, (i + 1 + epoch * length), sum_loss / (i + 1), train_acc))
                 logger.info('Epoch:[{}]\t loss={:.5f}\t acc={:.3f}'.format(epoch+1 , sum_loss / (i + 1), train_acc ))
             writer.add_scalar('train loss', sum_loss / (i + 1), epoch)
-            
-            # writer.add_scalar('Reg loss', treg, epoch)
+        # for i in range(len(mask_discrete)):
+        #     model.temp_s = torch.where(mask_discrete[i]==1, model.temp_s+1, model.temp_s)
 
         #get the ac with testdataset in each epoch
         logger.info('Waiting Test...')
@@ -193,5 +190,5 @@ if __name__ == '__main__':
             best_epoch = epoch+1
         logger.info('Best Accuracy is %.3f%% at Epoch %d' %  (best_acc, best_epoch))
     TP = model.total_param()
-    logger.info('Train has finished, weight and log saved at ', args.save_dir)
+    logger.info('Train has finished, weight and log saved at ', str(args.save_dir))
     logger.info('model size is:', str(TP))

@@ -317,7 +317,8 @@ class BitLinear(Module):
         # compute continuous mask
         self.mask = self.compute_mask(self.temp_s)
         self.mask_discrete = torch.bernoulli(self.mask) # sample from Bernulli distribution to generate discrete value 0 or 1
-        self.temp_s = torch.where(self.mask_discrete==1, self.temp_s*1.001, self.temp_s) # update the temp for mask based on the sample result in the previous step
+        # import pdb; pdb.set_trace()
+        self.temp_s = torch.where(self.mask_discrete==1, temp, self.temp_s) # update the temp for mask based on the sample result in the previous step
 
         if self.bin:
             dev = self.pweight.device
@@ -847,7 +848,7 @@ class BitConv2d(Bit_ConvNd):
         # print("self.temp_s", self.temp_s)
         self.mask = self.compute_mask(self.temp_s)
         self.mask_discrete = torch.bernoulli(self.mask) # sample from Bernulli distribution to generate discrete value 0 or 1
-        self.temp_s = torch.where(self.mask_discrete==1, self.temp_s*1.001, self.temp_s) # update the tempreture for mask based on the sample result in the previous step
+        self.temp_s = torch.where(self.mask_discrete==1, temp, self.temp_s) # update the tempreture for mask based on the sample result in the previous step
         if self.bin:
             dev = self.pweight.device
             pweight = torch.sigmoid(temp * self.pweight)  # continuous conversion
