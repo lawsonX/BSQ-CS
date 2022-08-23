@@ -24,10 +24,10 @@ parser.add_argument('--Nbits', type=int, default=4, help='quantization bitwidth 
 parser.add_argument('--lr', type=float, default=0.05, metavar='LR', help='learning rate (default: 0.1)')
 parser.add_argument('--workers', type=int, default=4, help='number of data loading workers (default: 2)')
 parser.add_argument('--decay', type=float, default=5e-4, help='weight decay (default: 5e-4)')
-parser.add_argument('--lmbda', type=float, default=1e-8, help='lambda for L1 mask regularization (default: 1e-8)')
+parser.add_argument('--lmbda', type=float, default=1e-4, help='lambda for L1 mask regularization (default: 1e-8)')
 parser.add_argument('--final-temp', type=float, default=200, help='temperature at the end of each round (default: 200)')
-# parser.add_argument('--mask-initial-value', type=float, default=0., help='initial value for mask parameters')
-parser.add_argument('--save_dir', type=str, default='train_result/0823/temp_s_Nbit8', help='save path of weight and log files')
+# parser.add_argument('--mask-initial-value', type=float, default=1., help='initial value for mask parameters')
+parser.add_argument('--save_dir', type=str, default='train_result/0823/temp_s_Nbit4_lmbda1e-4_lr005', help='save path of weight and log files')
 parser.add_argument('--log_file', type=str, default='train.log', help='save path of weight and log files')
 args = parser.parse_args()
 
@@ -176,6 +176,7 @@ if __name__ == '__main__':
                 correct += (predicted == labels).sum()
                 test_acc = (100 * correct / total)
             logger.info('Test\'s ac is: %.3f%%' % test_acc )
+            writer.add_scalar('Test Acc', test_acc, epoch)
 
         #save the model of the best epoch
         best_model_path = os.path.join(*[args.save_dir, 'model_best.pt'])
