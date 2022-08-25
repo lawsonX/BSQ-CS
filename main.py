@@ -24,10 +24,10 @@ parser.add_argument('--Nbits', type=int, default=4, help='quantization bitwidth 
 parser.add_argument('--lr', type=float, default=0.05, metavar='LR', help='learning rate (default: 0.1)')
 parser.add_argument('--workers', type=int, default=4, help='number of data loading workers (default: 2)')
 parser.add_argument('--decay', type=float, default=5e-4, help='weight decay (default: 5e-4)')
-parser.add_argument('--lmbda', type=float, default=1e-4, help='lambda for L1 mask regularization (default: 1e-8)')
+parser.add_argument('--lmbda', type=float, default=1e-8, help='lambda for L1 mask regularization (default: 1e-8)')
 parser.add_argument('--final-temp', type=float, default=200, help='temperature at the end of each round (default: 200)')
 # parser.add_argument('--mask-initial-value', type=float, default=1., help='initial value for mask parameters')
-parser.add_argument('--save_dir', type=str, default='train_result/0823/temp_s_Nbit4_lmbda1e-4_lr005', help='save path of weight and log files')
+parser.add_argument('--save_dir', type=str, default='train_result/0825/test', help='save path of weight and log files')
 parser.add_argument('--log_file', type=str, default='train.log', help='save path of weight and log files')
 args = parser.parse_args()
 
@@ -59,9 +59,6 @@ if __name__ == '__main__':
 
     train_log_filepath = os.path.join(args.save_dir, args.log_file)
     logger = get_logger(train_log_filepath)
-            
-    iters_per_reset = args.epochs-1
-    temp_increase = args.final_temp**(1./iters_per_reset)
 
     #prepare dataset and preprocessing
     transform_train = transform.Compose([
@@ -102,15 +99,22 @@ if __name__ == '__main__':
     #train
     logger.info('start training!')
     best_acc = 0
-    # temp_increase_s = 1
+    iters_per_reset = args.epochs-1
+    temp_increase = args.final_temp**(1./iters_per_reset)
+    sampled_iter = torch.ones(args.Nbits,requires_grad=False).cuda()
+    temp_s = torch.ones(args.Nbits,requires_grad=False).cuda()
     for epoch in range(0, args.epochs):
         print('\nEpoch: %d' % (epoch + 1))
         model.train()
         sum_loss = 0.0
         correct = 0.0
         total = 0.0
-        if epoch > 0: model.temp *= temp_increase
-        print('Current epoch temp:', model.temp)
+        
+        # update global temp
+        if epoch > 0: model.temp *= temp_increase**epoch
+        logger.info('Current global temp:', str(model.temp))
+        temp_s = str(model.temp_s.tolist())
+        logger.info('Current mask temp_s:',temp_s )
 
         for i, data in enumerate(trainloader, 0):
             #prepare dataset
@@ -123,6 +127,7 @@ if __name__ == '__main__':
             #forward & backward
             outputs = model(inputs)
 
+            # if epoch ==0: model.temp_s = temp_s
             masks = [m.mask for m in model.mask_modules]
             mask_discrete = [m.mask_discrete for m in model.mask_modules]
 
@@ -136,14 +141,14 @@ if __name__ == '__main__':
                 total_ele += t
                 ones += o
             ratio_one = ones/total_ele
-            # print('total element:', total_ele, '    ones:',ones)
             writer.add_scalar('Ratio of ones in bit mask', ratio_one, epoch)
-            logger.info('Ratio of ones in bit mask', str(ratio_one))
+            if i % 100 == 0 :
+                print('Ratio of ones in bit mask', str(ratio_one))
 
             entries_sum = sum(m.sum() for m in masks)
             loss = criterion(outputs, labels)  + args.lmbda * entries_sum #/TP # L1 Reg on mask
             # treg = entries_sum/TP
-            loss.backward()
+            loss.backward(retain_graph=True)
             optimizer.step()
             scheduler.step()
             
@@ -154,15 +159,11 @@ if __name__ == '__main__':
             correct += predicted.eq(labels.data).cpu().sum()
             train_acc = 100. * correct / total
             if i % 100 == 0:
-                # print('[epoch:%d, iter:%d] Loss: %.03f | Acc: %.3f%% ' 
-                #     % (epoch + 1, (i + 1 + epoch * length), sum_loss / (i + 1), train_acc))
                 logger.info('Epoch:[{}]\t loss={:.5f}\t acc={:.3f}'.format(epoch+1 , sum_loss / (i + 1), train_acc ))
             writer.add_scalar('train loss', sum_loss / (i + 1), epoch)
-        # for i in range(len(mask_discrete)):
-        #     model.temp_s = torch.where(mask_discrete[i]==1, model.temp_s+1, model.temp_s)
 
         #get the ac with testdataset in each epoch
-        logger.info('Waiting Test...')
+        print('Waiting Test...')
         with torch.no_grad():
             correct = 0
             total = 0
@@ -178,6 +179,12 @@ if __name__ == '__main__':
             logger.info('Test\'s ac is: %.3f%%' % test_acc )
             writer.add_scalar('Test Acc', test_acc, epoch)
 
+        # update temp_s based on sampled_iter per epoch
+        for m in model.mask_modules:
+            m.mask_discrete = torch.bernoulli(m.mask)
+            sampled_iter += m.mask_discrete
+        model.temp_s = temp_s*temp_increase**sampled_iter
+
         #save the model of the best epoch
         best_model_path = os.path.join(*[args.save_dir, 'model_best.pt'])
         if test_acc > best_acc:
@@ -191,5 +198,5 @@ if __name__ == '__main__':
             best_epoch = epoch+1
         logger.info('Best Accuracy is %.3f%% at Epoch %d' %  (best_acc, best_epoch))
     TP = model.total_param()
-    logger.info('Train has finished, weight and log saved at ', str(args.save_dir))
+    print('Train has finished, weight and log saved at ', str(args.save_dir))
     logger.info('model size is:', str(TP))

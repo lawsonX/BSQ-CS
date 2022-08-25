@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import math
 # from .bitcs import BitLinear, BitConv2d
-from .bitcs import BitLinear, BitConv2d
+from .bitcss import BitLinear, BitConv2d
 import numpy as np
 import copy
 
@@ -97,17 +97,17 @@ class BasicBlock(nn.Module):
         self.stride = stride
         self.act_bit = act_bit
 
-    def forward(self, x, temp):
+    def forward(self, x,temp_s, temp):
         # x, temp = input
         residual = x
 
-        out = self.conv1(x, temp)
+        out = self.conv1(x, temp_s,temp)
         out = self.bn1(out)
         out = self.relu1(out)
 
         # out = STE.apply(out,self.act_bit)
 
-        out = self.conv2(out, temp)
+        out = self.conv2(out,temp_s, temp)
         out = self.bn2(out)
 
         if self.downsample is not None:
@@ -192,10 +192,10 @@ class ResStage(nn.Module):
         self.block2 = BasicBlock(out_planes, out_planes, stride=1, downsample=None, Nbits=Nbits, act_bit=4, bin=False)
         self.block3 = BasicBlock(out_planes, out_planes, stride=1, downsample=None, Nbits=Nbits, act_bit=4, bin=False)
 
-    def forward(self, x, temp):
-        out = self.block1(x, temp)
-        out = self.block2(out, temp)
-        out = self.block3(out, temp)
+    def forward(self, x,temp_s, temp):
+        out = self.block1(x,temp_s, temp)
+        out = self.block2(out,temp_s, temp)
+        out = self.block3(out, temp_s,temp)
         return out
 
 class ResNet(MaskedNet):
@@ -213,7 +213,7 @@ class ResNet(MaskedNet):
         self.fc = BitLinear(64, out_features=num_classes, Nbits=Nbits, bin=bin)
         self.mask_modules = [m for m in self.modules() if type(m) in [BitConv2d, BitLinear] ]
         self.temp = 1
-        self.temp_s = torch.empty(Nbits).cuda()
+        self.temp_s = torch.ones(Nbits,requires_grad=False).cuda()
 
         for m in self.modules():
             if isinstance(m, BitConv2d):
@@ -230,17 +230,17 @@ class ResNet(MaskedNet):
                 m.bias.data.zero_()
 
     def forward(self, x):
-        x = self.conv1(x, self.temp)
+        x = self.conv1(x, self.temp_s, self.temp)
         x = self.bn1(x)
         x = self.relu(x)
         
-        x = self.layer1(x, self.temp)
-        x = self.layer2(x, self.temp)
-        x = self.layer3(x, self.temp)
+        x = self.layer1(x, self.temp_s, self.temp)
+        x = self.layer2(x, self.temp_s, self.temp)
+        x = self.layer3(x, self.temp_s, self.temp)
         # x = self.layer4(x, self.temp)
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
-        x = self.fc(x, self.temp)
+        x = self.fc(x,self.temp_s, self.temp)
 
         return x
     
