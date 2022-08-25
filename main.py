@@ -24,7 +24,8 @@ parser.add_argument('--Nbits', type=int, default=4, help='quantization bitwidth 
 parser.add_argument('--lr', type=float, default=0.05, metavar='LR', help='learning rate (default: 0.1)')
 parser.add_argument('--workers', type=int, default=4, help='number of data loading workers (default: 2)')
 parser.add_argument('--decay', type=float, default=5e-4, help='weight decay (default: 5e-4)')
-parser.add_argument('--lmbda', type=float, default=1e-8, help='lambda for L1 mask regularization (default: 1e-8)')
+parser.add_argument('--Tsparsity', type=float, default=0.1, help='Target Sparsity for mask')
+parser.add_argument('--lmbda', type=float, default=0.1, help='lambda for L1 mask regularization (default: 1e-8)')
 parser.add_argument('--final-temp', type=float, default=200, help='temperature at the end of each round (default: 200)')
 # parser.add_argument('--mask-initial-value', type=float, default=1., help='initial value for mask parameters')
 parser.add_argument('--save_dir', type=str, default='train_result/0825/test', help='save path of weight and log files')
@@ -112,9 +113,8 @@ if __name__ == '__main__':
         
         # update global temp
         if epoch > 0: model.temp *= temp_increase**epoch
-        logger.info('Current global temp:', str(model.temp))
-        temp_s = str(model.temp_s.tolist())
-        logger.info('Current mask temp_s:',temp_s )
+        print('Current global temp:', str(model.temp))
+        print('Current mask temp_s:',model.temp_s.tolist() )
 
         for i, data in enumerate(trainloader, 0):
             #prepare dataset
@@ -127,7 +127,6 @@ if __name__ == '__main__':
             #forward & backward
             outputs = model(inputs)
 
-            # if epoch ==0: model.temp_s = temp_s
             masks = [m.mask for m in model.mask_modules]
             mask_discrete = [m.mask_discrete for m in model.mask_modules]
 
@@ -146,8 +145,8 @@ if __name__ == '__main__':
                 print('Ratio of ones in bit mask', str(ratio_one))
 
             entries_sum = sum(m.sum() for m in masks)
-            loss = criterion(outputs, labels)  + args.lmbda * entries_sum #/TP # L1 Reg on mask
-            # treg = entries_sum/TP
+            # Budget-aware adjusting lmbda according to Eq(4)
+            loss = criterion(outputs, labels)  + (args.lmbda*(args.Tsparsity - (1-ratio_one))) * entries_sum  #/TP # L1 Reg on mask
             loss.backward(retain_graph=True)
             optimizer.step()
             scheduler.step()
