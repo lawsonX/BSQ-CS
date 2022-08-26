@@ -24,11 +24,11 @@ parser.add_argument('--Nbits', type=int, default=4, help='quantization bitwidth 
 parser.add_argument('--lr', type=float, default=0.05, metavar='LR', help='learning rate (default: 0.1)')
 parser.add_argument('--workers', type=int, default=4, help='number of data loading workers (default: 2)')
 parser.add_argument('--decay', type=float, default=5e-4, help='weight decay (default: 5e-4)')
-parser.add_argument('--Tsparsity', type=float, default=0.1, help='Target Sparsity for mask')
+parser.add_argument('--Tsparsity', type=float, default=0.3, help='Target Sparsity for mask')
 parser.add_argument('--lmbda', type=float, default=0.1, help='lambda for L1 mask regularization (default: 1e-8)')
 parser.add_argument('--final-temp', type=float, default=200, help='temperature at the end of each round (default: 200)')
 # parser.add_argument('--mask-initial-value', type=float, default=1., help='initial value for mask parameters')
-parser.add_argument('--save_dir', type=str, default='train_result/0825/test', help='save path of weight and log files')
+parser.add_argument('--save_dir', type=str, default='train_result/0826/N4_T03_LD01', help='save path of weight and log files')
 parser.add_argument('--log_file', type=str, default='train.log', help='save path of weight and log files')
 args = parser.parse_args()
 
@@ -102,8 +102,8 @@ if __name__ == '__main__':
     best_acc = 0
     iters_per_reset = args.epochs-1
     temp_increase = args.final_temp**(1./iters_per_reset)
-    sampled_iter = torch.ones(args.Nbits,requires_grad=False).cuda()
-    temp_s = torch.ones(args.Nbits,requires_grad=False).cuda()
+    # sampled_iter = torch.ones(args.Nbits,requires_grad=False).cuda()
+    # temp_s = torch.ones(args.Nbits,requires_grad=False).cuda()
     for epoch in range(0, args.epochs):
         print('\nEpoch: %d' % (epoch + 1))
         model.train()
@@ -113,8 +113,7 @@ if __name__ == '__main__':
         
         # update global temp
         if epoch > 0: model.temp *= temp_increase**epoch
-        print('Current global temp:', str(model.temp))
-        print('Current mask temp_s:',model.temp_s.tolist() )
+        print('Current global temp:', round(model.temp,3))
 
         for i, data in enumerate(trainloader, 0):
             #prepare dataset
@@ -162,7 +161,7 @@ if __name__ == '__main__':
             writer.add_scalar('train loss', sum_loss / (i + 1), epoch)
 
         #get the ac with testdataset in each epoch
-        print('Waiting Test...')
+        # print('Waiting Test...')
         with torch.no_grad():
             correct = 0
             total = 0
@@ -181,8 +180,9 @@ if __name__ == '__main__':
         # update temp_s based on sampled_iter per epoch
         for m in model.mask_modules:
             m.mask_discrete = torch.bernoulli(m.mask)
-            sampled_iter += m.mask_discrete
-        model.temp_s = temp_s*temp_increase**sampled_iter
+            m.sampled_iter += m.mask_discrete
+            m.temp_s = m.temp_s*temp_increase**m.sampled_iter
+            print('sample_iter:', m.sampled_iter.tolist(), '  |  temp_s:', [round(item,3) for item in m.temp_s.tolist()])
 
         #save the model of the best epoch
         best_model_path = os.path.join(*[args.save_dir, 'model_best.pt'])

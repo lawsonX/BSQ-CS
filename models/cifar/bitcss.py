@@ -107,8 +107,9 @@ class BitLinear(Module):
         # init bit mask
         self.mask_weight = torch.nn.Parameter(torch.Tensor(Nbits))
         torch.nn.init.constant_(self.mask_weight, 1)
-        # init mask_discrete with 1
         self.mask_discrete = torch.ones(Nbits,requires_grad=False).cuda()
+        self.sampled_iter = torch.ones(Nbits,requires_grad=False).cuda()
+        self.temp_s = torch.ones(Nbits,requires_grad=False).cuda()
 
         if self.bin:
             self.pweight = Parameter(torch.Tensor(out_features, in_features, Nbits))
@@ -311,7 +312,7 @@ class BitLinear(Module):
 
     def forward(self, input, temp_s, temp=1):
         # compute continuous bit mask
-        self.mask = torch.sigmoid(temp_s * self.mask_weight)
+        self.mask = torch.sigmoid(self.temp_s * self.mask_weight)
 
         if self.bin:
             dev = self.pweight.device
@@ -474,8 +475,9 @@ class Bit_ConvNd(Module):
         # init bit mask
         self.mask_weight = torch.nn.Parameter(torch.Tensor(Nbits))
         torch.nn.init.constant_(self.mask_weight, 1)
-        # init 
         self.mask_discrete = torch.ones(Nbits,requires_grad=False).cuda()
+        self.sampled_iter = torch.ones(Nbits,requires_grad=False).cuda()
+        self.temp_s = torch.ones(Nbits,requires_grad=False).cuda()
 
         if self.bin:
             if transposed:
@@ -836,7 +838,7 @@ class BitConv2d(Bit_ConvNd):
 
     def forward(self, input, temp_s, temp=1):
         # print('temp_s:',temp_s)
-        self.mask = torch.sigmoid(temp_s * self.mask_weight)
+        self.mask = torch.sigmoid(self.temp_s * self.mask_weight)
 
         if self.bin:
             dev = self.pweight.device
