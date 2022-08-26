@@ -22,13 +22,13 @@ parser.add_argument('--class', type=int, default=10, help='class of output')
 parser.add_argument('--Nbits', type=int, default=4, help='quantization bitwidth for weight')
 # parser.add_argument('--act_bit', type=int, default=4, help='quantization bitwidth for activation')
 parser.add_argument('--lr', type=float, default=0.05, metavar='LR', help='learning rate (default: 0.1)')
-parser.add_argument('--workers', type=int, default=4, help='number of data loading workers (default: 2)')
+parser.add_argument('--workers', type=int, default=2, help='number of data loading workers (default: 2)')
 parser.add_argument('--decay', type=float, default=5e-4, help='weight decay (default: 5e-4)')
 parser.add_argument('--Tsparsity', type=float, default=0.3, help='Target Sparsity for mask')
-parser.add_argument('--lmbda', type=float, default=0.1, help='lambda for L1 mask regularization (default: 1e-8)')
+parser.add_argument('--lmbda', type=float, default=1e-6, help='lambda for L1 mask regularization (default: 1e-8)')
 parser.add_argument('--final-temp', type=float, default=200, help='temperature at the end of each round (default: 200)')
 # parser.add_argument('--mask-initial-value', type=float, default=1., help='initial value for mask parameters')
-parser.add_argument('--save_dir', type=str, default='train_result/0826/N4_T03_LD01', help='save path of weight and log files')
+parser.add_argument('--save_dir', type=str, default='train_result/0826/N4_LD1e-6', help='save path of weight and log files')
 parser.add_argument('--log_file', type=str, default='train.log', help='save path of weight and log files')
 args = parser.parse_args()
 
@@ -75,10 +75,10 @@ if __name__ == '__main__':
     ])
 
     trainset = torchvision.datasets.CIFAR10(root='../data', train=True, download=True, transform=transform_train)
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=2)
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=args.workers)
 
     testset = torchvision.datasets.CIFAR10(root='../data', train=False, download=True, transform=transform_test)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=2)
+    testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=args.workers)
 
     #labels in CIFAR10
     classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
@@ -101,9 +101,8 @@ if __name__ == '__main__':
     logger.info('start training!')
     best_acc = 0
     iters_per_reset = args.epochs-1
-    temp_increase = args.final_temp**(1./iters_per_reset)
-    # sampled_iter = torch.ones(args.Nbits,requires_grad=False).cuda()
-    # temp_s = torch.ones(args.Nbits,requires_grad=False).cuda()
+    # temp_increase = args.final_temp**(1./iters_per_reset)
+    temp_increase = 100**(1./args.epochs)
     for epoch in range(0, args.epochs):
         print('\nEpoch: %d' % (epoch + 1))
         model.train()
@@ -179,6 +178,8 @@ if __name__ == '__main__':
 
         # update temp_s based on sampled_iter per epoch
         for m in model.mask_modules:
+            max_ = m.mask.max().item()
+            print('max value in self.mask:', max_)
             m.mask_discrete = torch.bernoulli(m.mask)
             m.sampled_iter += m.mask_discrete
             m.temp_s = m.temp_s*temp_increase**m.sampled_iter
@@ -187,7 +188,6 @@ if __name__ == '__main__':
         #save the model of the best epoch
         best_model_path = os.path.join(*[args.save_dir, 'model_best.pt'])
         if test_acc > best_acc:
-            # torch.save(model.state_dict(), best_model_path)
             torch.save({
                 'model': model.state_dict(),
                 'epoch': epoch,
