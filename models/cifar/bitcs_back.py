@@ -103,13 +103,12 @@ class BitLinear(Module):
         self.zero=False
         self.bzero=False
         self.ft = False
+        self.mask_initial_value = 1
 
         # init bit mask
         self.mask_weight = torch.nn.Parameter(torch.Tensor(Nbits))
-        torch.nn.init.constant_(self.mask_weight, 1)
-        self.mask_discrete = torch.ones(Nbits,requires_grad=False).cuda()
-        self.sampled_iter = torch.ones(Nbits,requires_grad=False).cuda()
-        self.temp_s = torch.ones(Nbits,requires_grad=False).cuda()
+        torch.nn.init.constant_(self.mask_weight, self.mask_initial_value)
+        self.temp_s = torch.ones(Nbits).cuda() # init temp for each element in bit mask
 
         if self.bin:
             self.pweight = Parameter(torch.Tensor(out_features, in_features, Nbits))
@@ -142,6 +141,10 @@ class BitLinear(Module):
             self.register_parameter('pbias', None)
             self.register_parameter('nbias', None)
             self.register_parameter('biasscale', None)
+            
+    def compute_mask(self, temp_s):
+        mask = torch.sigmoid(temp_s * self.mask_weight)
+        return mask
    
     def prune(self, temp):
         self.mask_weight.data = torch.clamp(temp * self.mask_weight.data, max=self.mask_initial_value)
@@ -310,9 +313,12 @@ class BitLinear(Module):
         else:
             return
 
-    def forward(self, input, temp_s, temp=1):
+    def forward(self, input, temp=1):
+        
         # compute continuous bit mask
-        self.mask = torch.sigmoid(self.temp_s * self.mask_weight)
+        self.mask = self.compute_mask(self.temp_s)
+        self.mask_discrete = torch.bernoulli(self.mask) # sample from Bernulli distribution to generate discrete value 0 or 1
+        self.temp_s = torch.where(self.mask_discrete==1, temp, self.temp_s) # update the temp for mask based on the sample result in the previous step
 
         if self.bin:
             dev = self.pweight.device
@@ -473,11 +479,10 @@ class Bit_ConvNd(Module):
         self.bin = bin
 
         # init bit mask
+        self.mask_initial_value = 1
         self.mask_weight = torch.nn.Parameter(torch.Tensor(Nbits))
-        torch.nn.init.constant_(self.mask_weight, 1)
-        self.mask_discrete = torch.ones(Nbits,requires_grad=False).cuda()
-        self.sampled_iter = torch.ones(Nbits,requires_grad=False).cuda()
-        self.temp_s = torch.ones(Nbits,requires_grad=False).cuda()
+        torch.nn.init.constant_(self.mask_weight, self.mask_initial_value)
+        self.temp_s = torch.ones(Nbits).cuda() # init tempreture for each element in bit mask
 
         if self.bin:
             if transposed:
@@ -760,6 +765,10 @@ class BitConv2d(Bit_ConvNd):
             in_channels, out_channels, kernel_size, stride, padding, dilation,
             False, _pair(0), groups, bias, padding_mode, Nbits, bin)
 
+    def compute_mask(self, temp_s):
+        mask = torch.sigmoid(temp_s * self.mask_weight)
+        return mask
+
     def prune(self, temp):
         self.mask_weight.data = torch.clamp(temp * self.mask_weight.data, max=self.mask_initial_value).cuda()
 
@@ -836,10 +845,12 @@ class BitConv2d(Bit_ConvNd):
         return F.conv2d(input, weight, bias, self.stride,
                         self.padding, self.dilation, self.groups)
 
-    def forward(self, input, temp_s, temp=1):
-        # print('temp_s:',temp_s)
-        self.mask = torch.sigmoid(self.temp_s * self.mask_weight)
+    def forward(self, input, temp=1):
 
+        self.mask = self.compute_mask(self.temp_s)
+        self.mask_discrete = torch.bernoulli(self.mask) # sample from Bernulli distribution to generate discrete value 0 or 1
+        self.temp_s = torch.where(self.mask_discrete==1, temp, self.temp_s) # update the tempreture for mask based on the sample result in the previous step
+        
         if self.bin:
             dev = self.pweight.device
             pweight = torch.sigmoid(temp * self.pweight)  # continuous conversion
@@ -883,3 +894,4 @@ if __name__ == '__main__':
     x = torch.randn(64,3,224,224)
     model = conv3x3(3, 64, 1, Nbits=4, bin=True)
     out = model(x)
+    # print(out)

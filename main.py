@@ -19,16 +19,15 @@ parser = argparse.ArgumentParser(description='Training a ResNet on CIFAR-10 with
 parser.add_argument('--batch-size', type=int, default=512, metavar='N', help='input batch size for training/val/test (default: 128)')
 parser.add_argument('--epochs', type=int, default=300, help='number of epochs to train (default: 300)')
 parser.add_argument('--class', type=int, default=10, help='class of output')
-parser.add_argument('--Nbits', type=int, default=4, help='quantization bitwidth for weight')
+parser.add_argument('--Nbits', type=int, default=8, help='quantization bitwidth for weight')
+parser.add_argument('--target-Nbit', type=float, default=4, help='Target Nbit')
 # parser.add_argument('--act_bit', type=int, default=4, help='quantization bitwidth for activation')
 parser.add_argument('--lr', type=float, default=0.05, metavar='LR', help='learning rate (default: 0.1)')
 parser.add_argument('--workers', type=int, default=2, help='number of data loading workers (default: 2)')
 parser.add_argument('--decay', type=float, default=5e-4, help='weight decay (default: 5e-4)')
-parser.add_argument('--Tsparsity', type=float, default=0.3, help='Target Sparsity for mask')
-parser.add_argument('--lmbda', type=float, default=1e-6, help='lambda for L1 mask regularization (default: 1e-8)')
+parser.add_argument('--lmbda', type=float, default=0.1, help='lambda for L1 mask regularization (default: 1e-8)')
 parser.add_argument('--final-temp', type=float, default=200, help='temperature at the end of each round (default: 200)')
-# parser.add_argument('--mask-initial-value', type=float, default=1., help='initial value for mask parameters')
-parser.add_argument('--save_dir', type=str, default='train_result/0826/N4_LD1e-6', help='save path of weight and log files')
+parser.add_argument('--save_dir', type=str, default='train_result/0828/T4N8_LD01', help='save path of weight and log files')
 parser.add_argument('--log_file', type=str, default='train.log', help='save path of weight and log files')
 args = parser.parse_args()
 
@@ -111,7 +110,7 @@ if __name__ == '__main__':
         total = 0.0
         
         # update global temp
-        if epoch > 0: model.temp *= temp_increase**epoch
+        if epoch > 0: model.temp = temp_increase**epoch
         print('Current global temp:', round(model.temp,3))
 
         for i, data in enumerate(trainloader, 0):
@@ -140,11 +139,12 @@ if __name__ == '__main__':
             ratio_one = ones/total_ele
             writer.add_scalar('Ratio of ones in bit mask', ratio_one, epoch)
             if i % 100 == 0 :
-                print('Ratio of ones in bit mask', str(ratio_one))
+                print('Ratio of ones in bit mask', ratio_one)
 
             entries_sum = sum(m.sum() for m in masks)
             # Budget-aware adjusting lmbda according to Eq(4)
-            loss = criterion(outputs, labels)  + (args.lmbda*(args.Tsparsity - (1-ratio_one))) * entries_sum  #/TP # L1 Reg on mask
+            Tsparsity = args.target_Nbit / args.Nbits
+            loss = criterion(outputs, labels)  + (args.lmbda*(Tsparsity - (1-ratio_one))) * entries_sum  #/TP # L1 Reg on mask
             loss.backward(retain_graph=True)
             optimizer.step()
             scheduler.step()
@@ -178,11 +178,9 @@ if __name__ == '__main__':
 
         # update temp_s based on sampled_iter per epoch
         for m in model.mask_modules:
-            max_ = m.mask.max().item()
-            print('max value in self.mask:', max_)
             m.mask_discrete = torch.bernoulli(m.mask)
             m.sampled_iter += m.mask_discrete
-            m.temp_s = m.temp_s*temp_increase**m.sampled_iter
+            m.temp_s = temp_increase**m.sampled_iter
             print('sample_iter:', m.sampled_iter.tolist(), '  |  temp_s:', [round(item,3) for item in m.temp_s.tolist()])
 
         #save the model of the best epoch
