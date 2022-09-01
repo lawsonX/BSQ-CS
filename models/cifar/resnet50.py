@@ -14,7 +14,7 @@ import numpy as np
 import copy
 
 USE_CUDA = torch.cuda.is_available()
-device =  torch.device("cuda" if USE_CUDA else "cpu")
+device =  torch.device("cuda:0" if USE_CUDA else "cpu")
 
 class PACTFunction(torch.autograd.Function):
     """
@@ -78,6 +78,11 @@ def conv3x3(in_planes, out_planes, stride=1, Nbits=4, bin=True):
     return BitConv2d(in_planes, out_planes, kernel_size=3, stride=stride,
                      padding=1, bias=False, Nbits = Nbits, bin=bin)
 
+def conv1x1(in_planes, out_planes, stride=1, Nbits=4, bin=True):
+    "1x1 convolution with padding"
+    return BitConv2d(in_planes, out_planes, kernel_size=1, stride=stride,
+                     padding=0, bias=False, Nbits = Nbits, bin=bin)
+
 
 class BasicBlock(nn.Module):
     expansion = 1
@@ -123,37 +128,46 @@ class BasicBlock(nn.Module):
 
 
 class Bottleneck(nn.Module):
-    expansion = 4
-
-    def __init__(self, inplanes, planes, stride=1, downsample=None):
+    # expansion = 4
+    def __init__(self, inplanes, mid_planes, planes, stride=1, downsample=False, Nbits=4, act_bit=4, bin=False):
         super(Bottleneck, self).__init__()
-        self.conv1 = nn.Conv2d(inplanes, planes, kernel_size=1, bias=False)
-        self.bn1 = nn.BatchNorm2d(planes)
-        self.conv2 = nn.Conv2d(planes, planes, kernel_size=3, stride=stride,
-                               padding=1, bias=False)
-        self.bn2 = nn.BatchNorm2d(planes)
-        self.conv3 = nn.Conv2d(planes, planes * 4, kernel_size=1, bias=False)
-        self.bn3 = nn.BatchNorm2d(planes * 4)
+        self.conv1 = conv1x1(inplanes, mid_planes, stride=1, Nbits=Nbits, bin=bin)
+        self.bn1 = nn.BatchNorm2d(mid_planes)
+        self.conv2 = conv3x3(mid_planes, mid_planes, stride, Nbits=Nbits, bin=bin)
+        self.bn2 = nn.BatchNorm2d(mid_planes)
+        self.conv3 = conv1x1(mid_planes, planes, stride=1, Nbits=Nbits, bin=bin)
+        self.bn3 = nn.BatchNorm2d(planes)
         self.relu = nn.ReLU(inplace=True)
+        self.res = nn.Sequential(
+                nn.Conv2d(inplanes, planes, kernel_size=1, stride=stride, bias=False),
+                nn.BatchNorm2d(planes),
+            )
+        self.stride = stride
+        if act_bit>3:
+            self.relu1 = nn.ReLU6(inplace=True) 
+            self.relu2 = nn.ReLU6(inplace=True) 
+        else:
+            self.relu1 = PACT()
+            self.relu2 = PACT()
         self.downsample = downsample
         self.stride = stride
-
-    def forward(self, x):
+        self.act_bit = act_bit
+    def forward(self, x, temp):
         residual = x
 
-        out = self.conv1(x)
+        out = self.conv1(x, temp)
         out = self.bn1(out)
         out = self.relu(out)
 
-        out = self.conv2(out)
+        out = self.conv2(out, temp)
         out = self.bn2(out)
         out = self.relu(out)
 
-        out = self.conv3(out)
+        out = self.conv3(out, temp)
         out = self.bn3(out)
 
-        if self.downsample is not None:
-            residual = self.downsample(x)
+        if self.downsample:
+            residual = self.res(x)
 
         out += residual
         out = self.relu(out)
@@ -189,9 +203,9 @@ class ResStage(nn.Module):
                 nn.BatchNorm2d(out_planes),
             )
             
-        self.block1 = BasicBlock(in_planes, out_planes, stride=stride, downsample=downsample, Nbits=Nbits, act_bit=4, bin=False)
-        self.block2 = BasicBlock(out_planes, out_planes, stride=1, downsample=None, Nbits=Nbits, act_bit=4, bin=False)
-        self.block3 = BasicBlock(out_planes, out_planes, stride=1, downsample=None, Nbits=Nbits, act_bit=4, bin=False)
+        self.block1 = Bottleneck(in_planes, out_planes, stride=1, downsample=downsample, Nbits=Nbits, act_bit=4, bin=False)
+        self.block2 = Bottleneck(out_planes, out_planes, stride=stride, downsample=None, Nbits=Nbits, act_bit=4, bin=False)
+        self.block3 = Bottleneck(out_planes, out_planes, stride=1, downsample=None, Nbits=Nbits, act_bit=4, bin=False)
 
     def forward(self, x, temp):
         out = self.block1(x, temp)
@@ -199,22 +213,42 @@ class ResStage(nn.Module):
         out = self.block3(out, temp)
         return out
 
-class ResNet(MaskedNet):
-    def __init__(self, num_classes=10, Nbits=8, bin=True):
-        super(ResNet, self).__init__()
+class ResNet50(MaskedNet):
+    def __init__(self, num_classes=1000, Nbits=8, bin=True):
+        super(ResNet50, self).__init__()
 
-        self.conv1 = BitConv2d(3, 16, kernel_size=3, padding=1,bias=False, Nbits=Nbits, bin=bin)
-        self.bn1 = nn.BatchNorm2d(16)
+        self.conv1 = BitConv2d(3, 64, kernel_size=7, stride=2, padding=3,bias=False, Nbits=Nbits, bin=bin)
+        self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
-        self.layer1 = ResStage(16,16,1,1,Nbits,bin=bin)
-        self.layer2 = ResStage(16,32,2,1,Nbits,bin=bin)
-        self.layer3 = ResStage(32,64,2,1,Nbits,bin=bin)
-        # self.layer4 = ResStage(64,128,2,1,Nbits,bin=bin)
-        self.avgpool = nn.AvgPool2d(8)
-        self.fc = BitLinear(64, out_features=num_classes, Nbits=Nbits, bin=bin)
+        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+
+        # self.layer1 = ResStage(64,256,1,1,Nbits,bin=bin)
+        # self.layer2 = ResStage(256,512,2,1,Nbits,bin=bin)
+        # self.layer3 = ResStage(512,1024,2,1,Nbits,bin=bin)
+        # self.layer4 = ResStage(1024,2048,2,1,Nbits,bin=bin)
+        self.layer1_0 = Bottleneck(64, 64, 256, stride=2, downsample=True, Nbits=Nbits, act_bit=4, bin=bin)
+        self.layer1_1 = Bottleneck(256, 64, 256, stride=1, downsample=False, Nbits=Nbits, act_bit=4, bin=bin)
+        self.layer1_2 = Bottleneck(256, 64, 256, stride=1, downsample=False, Nbits=Nbits, act_bit=4, bin=bin)
+        self.layer2_0 = Bottleneck(256, 128, 512, stride=2, downsample=True, Nbits=Nbits, act_bit=4, bin=bin)
+        self.layer2_1 = Bottleneck(512, 128, 512, stride=1, downsample=False, Nbits=Nbits, act_bit=4, bin=bin)
+        self.layer2_2 = Bottleneck(512, 128, 512, stride=1, downsample=False, Nbits=Nbits, act_bit=4, bin=bin)
+        self.layer2_3 = Bottleneck(512, 128, 512, stride=1, downsample=False, Nbits=Nbits, act_bit=4, bin=bin)
+        self.layer3_0 = Bottleneck(512, 256, 1024, stride=2, downsample=True, Nbits=Nbits, act_bit=4, bin=bin)
+        self.layer3_1 = Bottleneck(1024, 256, 1024, stride=1, downsample=False, Nbits=Nbits, act_bit=4, bin=bin)
+        self.layer3_2 = Bottleneck(1024, 256, 1024, stride=1, downsample=False, Nbits=Nbits, act_bit=4, bin=bin)
+        self.layer3_3 = Bottleneck(1024, 256, 1024, stride=1, downsample=False, Nbits=Nbits, act_bit=4, bin=bin)
+        self.layer3_4 = Bottleneck(1024, 256, 1024, stride=1, downsample=False, Nbits=Nbits, act_bit=4, bin=bin)
+        self.layer3_5 = Bottleneck(1024, 256, 1024, stride=1, downsample=False, Nbits=Nbits, act_bit=4, bin=bin)
+        self.layer4_0 = Bottleneck(1024, 512, 2048, stride=2, downsample=True, Nbits=Nbits, act_bit=4, bin=bin)
+        self.layer4_1 = Bottleneck(2048, 512, 2048, stride=1, downsample=False, Nbits=Nbits, act_bit=4, bin=bin)
+        self.layer4_2 = Bottleneck(2048, 512, 2048, stride=1, downsample=False, Nbits=Nbits, act_bit=4, bin=bin)
+
+        self.avgpool = nn.AdaptiveAvgPool2d((1,1))
+        self.fc = BitLinear(2048, out_features=num_classes, Nbits=Nbits, bin=bin)
+        
         self.mask_modules = [m for m in self.modules() if type(m) in [BitConv2d, BitLinear] ]
         self.temp = 1
-        self.temp_s = torch.Tensor(Nbits)
+        self.temp_s = torch.ones(Nbits,requires_grad=False).to(device)
 
         for m in self.modules():
             if isinstance(m, BitConv2d):
@@ -234,13 +268,27 @@ class ResNet(MaskedNet):
         x = self.conv1(x, self.temp)
         x = self.bn1(x)
         x = self.relu(x)
+        x = self.maxpool(x)
         
-        x = self.layer1(x, self.temp)
-        x = self.layer2(x, self.temp)
-        x = self.layer3(x, self.temp)
-        # x = self.layer4(x, self.temp)
+        x = self.layer1_0(x, self.temp)
+        x = self.layer1_1(x, self.temp)
+        x = self.layer1_2(x, self.temp)
+        x = self.layer2_0(x, self.temp)
+        x = self.layer2_1(x, self.temp)
+        x = self.layer2_2(x, self.temp)
+        x = self.layer2_3(x, self.temp)
+        x = self.layer3_0(x, self.temp)
+        x = self.layer3_1(x, self.temp)
+        x = self.layer3_2(x, self.temp)
+        x = self.layer3_3(x, self.temp)
+        x = self.layer3_4(x, self.temp)
+        x = self.layer3_5(x, self.temp)
+        x = self.layer4_0(x, self.temp)
+        x = self.layer4_1(x, self.temp)
+        x = self.layer4_2(x, self.temp)
+
         x = self.avgpool(x)
-        x = x.view(x.size(0), -1)
+        x = torch.flatten(x,1)
         x = self.fc(x, self.temp)
 
         return x
@@ -452,10 +500,14 @@ class ResNet(MaskedNet):
                     Nbit_dict[name] = [m.Nbits, 0]
         return Nbit_dict
 
-def resnet(**kwargs):
+def resnet50(**kwargs):
     """
     Constructs a ResNet model.
     """
-    return ResNet(**kwargs)
+    return ResNet50(**kwargs)
     
- 
+if __name__ == '__main__':
+    x = torch.randn(1,3,224,224).cuda()
+    model = ResNet50().cuda()
+    out = model(x)
+    print(x)

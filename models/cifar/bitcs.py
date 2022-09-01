@@ -9,6 +9,9 @@ from torch.nn import Parameter
 from torch.nn.modules.module import Module
 import torch.nn.functional as F
 
+USE_CUDA = torch.cuda.is_available()
+device =  torch.device("cuda" if USE_CUDA else "cpu")
+
 def sigmoid(x):
     return float(1./(1.+np.exp(-x)))
 
@@ -94,9 +97,9 @@ class BitLinear(Module):
         self.out_features = out_features
         self.Nbits = Nbits
         ex = np.arange(Nbits-1, -1, -1)
-        self.exps = torch.Tensor((2**ex)/(2**(self.Nbits)-1)).float()
+        self.exps = torch.nn.Parameter(torch.Tensor((2**ex)/(2**(self.Nbits)-1)).float())
         self.bNbits = Nbits
-        self.bexps = torch.Tensor((2**ex)/(2**(self.bNbits)-1)).float()
+        self.bexps =torch.nn.Parameter( torch.Tensor((2**ex)/(2**(self.bNbits)-1)).float())
         self.bin = bin
         self.total_weight = out_features*in_features
         self.total_bias = out_features
@@ -105,21 +108,27 @@ class BitLinear(Module):
         self.ft = False
 
         # init bit mask
-        self.mask_weight = torch.nn.Parameter(torch.Tensor(Nbits))
+        self.mask_weight = torch.nn.Parameter(torch.Tensor(Nbits)).to(device)
         torch.nn.init.constant_(self.mask_weight, 1)
-        self.mask_discrete = torch.ones(Nbits,requires_grad=False).cuda()
-        self.sampled_iter = torch.ones(Nbits,requires_grad=False).cuda()
-        self.temp_s = torch.ones(Nbits,requires_grad=False).cuda()
+        # self.mask_discrete = torch.nn.Parameter(torch.Tensor(Nbits)).to(device)
+        # torch.nn.init.constant_(self.mask_discrete, 1)
+        # self.sampled_iter = torch.nn.Parameter(torch.Tensor(Nbits)).to(device)
+        # torch.nn.init.constant_(self.sampled_iter, 1)
+        # self.temp_s= torch.nn.Parameter(torch.Tensor(Nbits)).to(device)
+        # torch.nn.init.constant_(self.temp_s, 1)
+        self.mask_discrete = torch.ones(Nbits,requires_grad=False).to(device)
+        self.sampled_iter = torch.ones(Nbits,requires_grad=False).to(device)
+        self.temp_s = torch.ones(Nbits,requires_grad=False).to(device)
 
         if self.bin:
             self.pweight = Parameter(torch.Tensor(out_features, in_features, Nbits))
             self.nweight = Parameter(torch.Tensor(out_features, in_features, Nbits))
-            self.scale = Parameter(torch.Tensor(1))
+            self.scale = Parameter(torch.Tensor(1)).to(device)
 
             if bias:
                 self.pbias = Parameter(torch.Tensor(out_features, Nbits))
                 self.nbias = Parameter(torch.Tensor(out_features, Nbits))
-                self.biasscale = Parameter(torch.Tensor(1))
+                self.biasscale = Parameter(torch.Tensor(1)).to(device)
             else:
                 self.register_parameter('pbias', None)
                 self.register_parameter('nbias', None)
@@ -208,14 +217,14 @@ class BitLinear(Module):
 
     def forward(self, input, temp=1):
         # compute continuous bit mask
-        self.mask = torch.sigmoid(self.temp_s * self.mask_weight)
+        self.mask = torch.sigmoid(self.temp_s * self.mask_weight).to(device)
 
         if self.bin:
             dev = self.pweight.device
             pweight = torch.sigmoid(temp * self.pweight)
             nweight = torch.sigmoid(temp * self.nweight)
-            weight = torch.mul(pweight-nweight, self.exps.to(dev))
-
+            weight = torch.mul(pweight-nweight, self.exps)
+            # print(weight.device, self.mask.device, self.mask_discrete.device)
             masked_weight = weight * self.mask * self.mask_discrete
             weight =  torch.sum(masked_weight,dim=2) * self.scale
 
@@ -267,30 +276,36 @@ class Bit_ConvNd(Module):
         self.padding_mode = padding_mode
         self.Nbits = Nbits
         ex = np.arange(Nbits-1, -1, -1)
-        self.exps = torch.Tensor((2**ex)/(2**(self.Nbits)-1)).float()
+        self.exps = torch.nn.Parameter(torch.Tensor((2**ex)/(2**(self.Nbits)-1)).float())
         self.bNbits = Nbits
-        self.bexps = torch.Tensor((2**ex)/(2**(self.bNbits)-1)).float()
+        self.bexps = torch.nn.Parameter(torch.Tensor((2**ex)/(2**(self.bNbits)-1)).float())
         self.zero=False
         self.bzero=False
         self.ft=False
         self.bin = bin
 
         # init bit mask
-        self.mask_weight = torch.nn.Parameter(torch.Tensor(Nbits))
+        self.mask_weight = torch.nn.Parameter(torch.Tensor(Nbits)).to(device)
         torch.nn.init.constant_(self.mask_weight, 1)
-        self.mask_discrete = torch.ones(Nbits,requires_grad=False).cuda()
-        self.sampled_iter = torch.ones(Nbits,requires_grad=False).cuda()
-        self.temp_s = torch.ones(Nbits,requires_grad=False).cuda()
+        # self.mask_discrete = torch.nn.Parameter(torch.Tensor(Nbits)).to(device)
+        # torch.nn.init.constant_(self.mask_discrete, 1)
+        # self.sampled_iter = torch.nn.Parameter(torch.Tensor(Nbits)).to(device)
+        # torch.nn.init.constant_(self.sampled_iter, 1)
+        # self.temp_s= torch.nn.Parameter(torch.Tensor(Nbits)).to(device)
+        # torch.nn.init.constant_(self.temp_s, 1)
+        self.mask_discrete = torch.ones(Nbits,requires_grad=False).to(device)
+        self.sampled_iter = torch.ones(Nbits,requires_grad=False).to(device)
+        self.temp_s = torch.ones(Nbits,requires_grad=False).to(device)
 
         if self.bin:
             if transposed:
                 self.pweight = Parameter(torch.Tensor(in_channels, out_channels // groups, *kernel_size, Nbits))
                 self.nweight = Parameter(torch.Tensor(in_channels, out_channels // groups, *kernel_size, Nbits))
-                self.scale = Parameter(torch.Tensor(1))
+                self.scale = Parameter(torch.Tensor(1)).to(device)
             else:
                 self.pweight = Parameter(torch.Tensor(out_channels, in_channels // groups, *kernel_size, Nbits))
                 self.nweight = Parameter(torch.Tensor(out_channels, in_channels // groups, *kernel_size, Nbits))
-                self.scale = Parameter(torch.Tensor(1))
+                self.scale = Parameter(torch.Tensor(1)).to(device)
                 
             if bias:
                 self.pbias = Parameter(torch.Tensor(out_channels, Nbits))
@@ -384,14 +399,12 @@ class Bit_ConvNd(Module):
         ini_w = torch.full_like(self.pweight[...,0], 0)
         init.kaiming_uniform_(ini_w, a=math.sqrt(5))
         self.ini2bit(ini_w)
-        # import pdb; pdb.set_trace()
         if self.pbias is not None:
             #stdv = 1. / math.sqrt(self.pweight.size(1))
             fan_in, _ = init._calculate_fan_in_and_fan_out(self.pweight)
             stdv = 1 / math.sqrt(fan_in)
             ini_b = torch.Tensor(self.out_channels).uniform_(-stdv, stdv)
             self.ini2bit(ini_b, b=True)
-              
 
 class BitConv2d(Bit_ConvNd):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1,
@@ -425,15 +438,16 @@ class BitConv2d(Bit_ConvNd):
 
         if self.bin:
             dev = self.pweight.device
-            pweight = torch.sigmoid(temp * self.pweight)  # continuous conversion
+            pweight = torch.sigmoid(temp * self.pweight) # continuous conversion
             nweight = torch.sigmoid(temp * self.nweight)
-            weight = torch.mul(pweight-nweight, self.exps.to(dev))
+            weight = torch.mul(pweight-nweight, self.exps)
+            # print(weight.device, self.mask.device, self.mask_discrete.device)
             masked_weight = weight * self.mask * self.mask_discrete
 
             weight =  torch.sum(masked_weight,dim=4) * self.scale
 
             if self.pbias is not None:
-                bias = torch.mul((self.pbias-self.nbias), self.bexps.to(dev))
+                bias = torch.mul((self.pbias-self.nbias), self.bexps.to(device))
                 bias = bit_STE.apply(torch.sum(bias,dim=1), self.bNbits, self.bzero) * self.biasscale
             else:
                 bias = None
@@ -454,6 +468,6 @@ if __name__ == '__main__':
         return BitConv2d(in_planes, out_planes, kernel_size=3, stride=stride,
                         padding=1, bias=False, Nbits = Nbits, bin=bin)
     
-    x = torch.randn(64,3,224,224)
+    x = torch.randn(64,3,224,224).to(device)
     model = conv3x3(3, 64, 1, Nbits=4, bin=True)
     out = model(x)
