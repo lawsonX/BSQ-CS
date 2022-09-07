@@ -156,12 +156,12 @@ if __name__ == '__main__':
             if i % 50 == 0:
                 logger.info('Epoch:[{}]\t Ratio_ones={:.5f}\t loss={:.5f}\t acc={:.3f}'.format(epoch+1 ,ratio_one, sum_loss / (i + 1), train_acc ))
             writer.add_scalar('train loss', sum_loss / (i + 1), epoch)
-            save_name = os.path.join(*[args.save_dir, 'model_latest.pt'])
-            torch.save({
-                    'model': model.state_dict(),
-                    'epoch': epoch,
-                    'valid_acc': train_acc,
-                }, save_name)
+        save_name = os.path.join(*[args.save_dir, 'model_latest.pt'])
+        torch.save({
+                'model': model.state_dict(),
+                'epoch': epoch,
+                'valid_acc': train_acc,
+            }, save_name)
 
         # finalize the continuous bitmask to discrete
         if epoch == args.epochs-1:

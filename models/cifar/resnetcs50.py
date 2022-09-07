@@ -13,8 +13,6 @@ from .bitcs import BitLinear, BitConv2d
 import numpy as np
 import copy
 
-USE_CUDA = torch.cuda.is_available()
-device =  torch.device("cuda:0" if USE_CUDA else "cpu")
 
 class PACTFunction(torch.autograd.Function):
     """
@@ -193,54 +191,54 @@ class MaskedNet(nn.Module):
     def prune(self):
         for m in self.mask_modules: m.prune(self.temp)
 
-class ResStage(nn.Module):
-    def __init__(self, in_planes, out_planes, stride, padding, Nbits=4, bin=True, bias=False):
-        super(ResStage, self).__init__()
-        downsample = None
-        if stride != 1 or in_planes != out_planes:
-            downsample = nn.Sequential(
-                nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(out_planes),
-            )
+# class ResStage(nn.Module):
+#     def __init__(self, in_planes, out_planes, stride, padding, Nbits=4, bin=True, bias=False):
+#         super(ResStage, self).__init__()
+#         downsample = None
+#         if stride != 1 or in_planes != out_planes:
+#             downsample = nn.Sequential(
+#                 nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False),
+#                 nn.BatchNorm2d(out_planes),
+#             )
             
-        self.block1 = Bottleneck(in_planes, out_planes, stride=1, downsample=downsample, Nbits=Nbits, act_bit=4, bin=True)
-        self.block2 = Bottleneck(out_planes, out_planes, stride=stride, downsample=None, Nbits=Nbits, act_bit=4, bin=True)
-        self.block3 = Bottleneck(out_planes, out_planes, stride=1, downsample=None, Nbits=Nbits, act_bit=4, bin=True)
+#         self.block1 = Bottleneck(in_planes, out_planes, stride=1, downsample=downsample, Nbits=Nbits, act_bit=4, bin=True)
+#         self.block2 = Bottleneck(out_planes, out_planes, stride=stride, downsample=None, Nbits=Nbits, act_bit=4, bin=True)
+#         self.block3 = Bottleneck(out_planes, out_planes, stride=1, downsample=None, Nbits=Nbits, act_bit=4, bin=True)
 
-    def forward(self, x, temp):
-        out = self.block1(x, temp)
-        out = self.block2(out, temp)
-        out = self.block3(out, temp)
-        return out
+#     def forward(self, x, temp):
+#         out = self.block1(x, temp)
+#         out = self.block2(out, temp)
+#         out = self.block3(out, temp)
+#         return out
 
 class ResNet50(MaskedNet):
-    def __init__(self, num_classes=1000, Nbits=8, act_bit=4, bin=True):
+    def __init__(self, num_classes=1000, Nbits=4, act_bit=4, bin=True):
         super(ResNet50, self).__init__()
 
-        self.conv1 = BitConv2d(3, 64, kernel_size=7, stride=2, padding=3,bias=False, Nbits=Nbits, bin=bin)
+        self.conv1 = BitConv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False, Nbits=5, bin=bin)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
 
-        self.layer1_0 = Bottleneck(64, 64, 256, stride=2, downsample=True, Nbits=Nbits, act_bit=4, bin=bin)
-        self.layer1_1 = Bottleneck(256, 64, 256, stride=1, downsample=False, Nbits=Nbits, act_bit=4, bin=bin)
-        self.layer1_2 = Bottleneck(256, 64, 256, stride=1, downsample=False, Nbits=Nbits, act_bit=4, bin=bin)
-        self.layer2_0 = Bottleneck(256, 128, 512, stride=2, downsample=True, Nbits=Nbits, act_bit=4, bin=bin)
-        self.layer2_1 = Bottleneck(512, 128, 512, stride=1, downsample=False, Nbits=Nbits, act_bit=4, bin=bin)
-        self.layer2_2 = Bottleneck(512, 128, 512, stride=1, downsample=False, Nbits=Nbits, act_bit=4, bin=bin)
-        self.layer2_3 = Bottleneck(512, 128, 512, stride=1, downsample=False, Nbits=Nbits, act_bit=4, bin=bin)
-        self.layer3_0 = Bottleneck(512, 256, 1024, stride=2, downsample=True, Nbits=Nbits, act_bit=4, bin=bin)
-        self.layer3_1 = Bottleneck(1024, 256, 1024, stride=1, downsample=False, Nbits=Nbits, act_bit=4, bin=bin)
-        self.layer3_2 = Bottleneck(1024, 256, 1024, stride=1, downsample=False, Nbits=Nbits, act_bit=4, bin=bin)
-        self.layer3_3 = Bottleneck(1024, 256, 1024, stride=1, downsample=False, Nbits=Nbits, act_bit=4, bin=bin)
-        self.layer3_4 = Bottleneck(1024, 256, 1024, stride=1, downsample=False, Nbits=Nbits, act_bit=4, bin=bin)
-        self.layer3_5 = Bottleneck(1024, 256, 1024, stride=1, downsample=False, Nbits=Nbits, act_bit=4, bin=bin)
-        self.layer4_0 = Bottleneck(1024, 512, 2048, stride=2, downsample=True, Nbits=Nbits, act_bit=4, bin=bin)
-        self.layer4_1 = Bottleneck(2048, 512, 2048, stride=1, downsample=False, Nbits=Nbits, act_bit=4, bin=bin)
-        self.layer4_2 = Bottleneck(2048, 512, 2048, stride=1, downsample=False, Nbits=Nbits, act_bit=4, bin=bin)
+        self.layer1_0 = Bottleneck(64, 64, 256, stride=2, downsample=True, Nbits=Nbits, act_bit=act_bit, bin=bin)
+        self.layer1_1 = Bottleneck(256, 64, 256, stride=1, downsample=False, Nbits=Nbits, act_bit=act_bit, bin=bin)
+        self.layer1_2 = Bottleneck(256, 64, 256, stride=1, downsample=False, Nbits=Nbits, act_bit=act_bit, bin=bin)
+        self.layer2_0 = Bottleneck(256, 128, 512, stride=2, downsample=True, Nbits=Nbits, act_bit=act_bit, bin=bin)
+        self.layer2_1 = Bottleneck(512, 128, 512, stride=1, downsample=False, Nbits=Nbits, act_bit=act_bit, bin=bin)
+        self.layer2_2 = Bottleneck(512, 128, 512, stride=1, downsample=False, Nbits=Nbits, act_bit=act_bit, bin=bin)
+        self.layer2_3 = Bottleneck(512, 128, 512, stride=1, downsample=False, Nbits=Nbits, act_bit=act_bit, bin=bin)
+        self.layer3_0 = Bottleneck(512, 256, 1024, stride=2, downsample=True, Nbits=Nbits, act_bit=act_bit, bin=bin)
+        self.layer3_1 = Bottleneck(1024, 256, 1024, stride=1, downsample=False, Nbits=Nbits, act_bit=act_bit, bin=bin)
+        self.layer3_2 = Bottleneck(1024, 256, 1024, stride=1, downsample=False, Nbits=Nbits, act_bit=act_bit, bin=bin)
+        self.layer3_3 = Bottleneck(1024, 256, 1024, stride=1, downsample=False, Nbits=Nbits, act_bit=act_bit, bin=bin)
+        self.layer3_4 = Bottleneck(1024, 256, 1024, stride=1, downsample=False, Nbits=Nbits, act_bit=act_bit, bin=bin)
+        self.layer3_5 = Bottleneck(1024, 256, 1024, stride=1, downsample=False, Nbits=Nbits, act_bit=act_bit, bin=bin)
+        self.layer4_0 = Bottleneck(1024, 512, 2048, stride=2, downsample=True, Nbits=Nbits, act_bit=act_bit, bin=bin)
+        self.layer4_1 = Bottleneck(2048, 512, 2048, stride=1, downsample=False, Nbits=Nbits, act_bit=act_bit, bin=bin)
+        self.layer4_2 = Bottleneck(2048, 512, 2048, stride=1, downsample=False, Nbits=5, act_bit=act_bit, bin=bin)
 
         self.avgpool = nn.AdaptiveAvgPool2d((1,1))
-        self.fc = BitLinear(2048, out_features=num_classes, Nbits=Nbits, bin=bin)
+        self.fc = BitLinear(2048, out_features=num_classes, Nbits=8, bin=bin)
         
         self.mask_modules = [m for m in self.modules() if type(m) in [BitConv2d, BitLinear] ]
         self.temp = 1

@@ -19,27 +19,29 @@ from utils_ import *
 from torchvision import datasets, transforms
 from torch.autograd import Variable
 import torchvision.models as models
-from models.cifar.resnet50 import ResNet50
+from models.cifar.resnetcs50 import ResNet50
+from models.cifar.resnetcs18 import ResNet18
 
 # sys.path.append("../../")
 
 parser = argparse.ArgumentParser("BinealNet")
-parser.add_argument('--batch_size', type=int, default=192, help='batch size')
+parser.add_argument('--data', default='/home/datasets/imagenet', help='path to dataset')
+parser.add_argument('--batch_size', type=int, default=128, help='batch size')
 parser.add_argument('--epochs', type=int, default=256, help='num of training epochs')
-parser.add_argument('--learning_rate', type=float, default=0.05, help='init learning rate')
+parser.add_argument('--learning_rate', type=float, default=0.001, help='init learning rate')
 parser.add_argument('--momentum', type=float, default=0.9, help='momentum')
 parser.add_argument('--weight_decay', type=float, default=1e-4, help='weight decay')
-parser.add_argument('--save', type=str, default='train_result/0906/test', help='path for saving trained models')
-parser.add_argument('--data', default='/home/datasets/imagenet', help='path to dataset')
 parser.add_argument('--label_smooth', type=float, default=0.1, help='label smoothing')
 parser.add_argument('--teacher', type=str, default='resnet50', help='path of ImageNet')
-parser.add_argument('-j', '--workers', default=32, type=int, metavar='N',
+parser.add_argument('-j', '--workers', default=16, type=int, metavar='N',
                     help='number of data loading workers (default: 4)')
-parser.add_argument('--lmbda', type=float, default=1.0, help='lambda for L1 mask regularization (default: 1e-8)')
+parser.add_argument('--lmbda', type=float, default=1e-8, help='lambda for L1 mask regularization (default: 1e-8)')
 parser.add_argument('--final-temp', type=float, default=200, help='temperature at the end of each round (default: 200)')
 parser.add_argument('--act', type=int, default=0, help='quantization bitwidth for activation')
-parser.add_argument('--target-Nbit', type=int, default=3, help='Target Nbit')
-parser.add_argument('--Nbits', type=int, default=4, help='quantization bitwidth for weight')
+parser.add_argument('--target-Nbit', type=int, default=5, help='Target Nbit')
+parser.add_argument('--Nbits', type=int, default=6, help='quantization bitwidth for weight')
+parser.add_argument('--save', type=str, default='train_result/0908/IMG_A0T5N6H8T8', help='path for saving trained models')
+parser.add_argument('--log_file', type=str, default='train.log', help='save path of weight and log files')
 
 args = parser.parse_args()
 
@@ -47,18 +49,28 @@ CLASSES = 1000
 if not os.path.exists(args.save):
     os.makedirs(args.save)
 
-if not os.path.exists('log'):
-    os.mkdir('log')
-
-log_format = '%(asctime)s %(message)s'
-logging.basicConfig(stream=sys.stdout, level=logging.INFO,
-    format=log_format, datefmt='%m/%d %I:%M:%S %p')
-fh = logging.FileHandler(os.path.join('log/log.txt'))
-fh.setFormatter(logging.Formatter(log_format))
-logging.getLogger().addHandler(fh)
+def get_logger(filename, verbosity=1, name=None):
+    level_dict = {0: logging.DEBUG, 1: logging.INFO, 2: logging.WARNING}
+    formatter = logging.Formatter(
+        "[%(asctime)s][%(filename)s][line:%(lineno)d][%(levelname)s] %(message)s"
+    )
+    logger = logging.getLogger(name)
+    logger.setLevel(level_dict[verbosity])
+ 
+    fh = logging.FileHandler(filename, "w")
+    fh.setFormatter(formatter)
+    logger.addHandler(fh)
+ 
+    sh = logging.StreamHandler()
+    sh.setFormatter(formatter)
+    logger.addHandler(sh)
+ 
+    return logger
 
 def main():
     writer = SummaryWriter(args.save)
+    train_log_filepath = os.path.join(args.save, args.log_file)
+    logger = get_logger(train_log_filepath)
 
     if not torch.cuda.is_available():
         sys.exit(1)
@@ -69,13 +81,14 @@ def main():
     logging.info("args = %s", args)
 
     # load model
-    model_teacher = models.__dict__[args.teacher](pretrained=True)
-    model_teacher = nn.DataParallel(model_teacher).cuda()
-    for p in model_teacher.parameters():
-        p.requires_grad = False
-    model_teacher.eval()
+    model_teacher = None
+    # model_teacher = models.__dict__[args.teacher](pretrained=True)
+    # model_teacher = nn.DataParallel(model_teacher).cuda()
+    # for p in model_teacher.parameters():
+    #     p.requires_grad = False
+    # model_teacher.eval()
 
-    model_student = ResNet50(
+    model_student = ResNet18(
         num_classes=CLASSES,
         Nbits=args.Nbits,
         act_bit = args.act,
@@ -87,6 +100,7 @@ def main():
 
     criterion = nn.CrossEntropyLoss()
     criterion = criterion.cuda()
+
     criterion_smooth = CrossEntropyLabelSmooth(CLASSES, args.label_smooth)
     criterion_smooth = criterion_smooth.cuda()
     criterion_kd = nn.KLDivLoss()
@@ -110,12 +124,12 @@ def main():
 
     checkpoint_tar = os.path.join(args.save, 'checkpoint.pth.tar')
     if os.path.exists(checkpoint_tar):
-        logging.info('loading checkpoint {} ..........'.format(checkpoint_tar))
+        logger.info('loading checkpoint {} ..........'.format(checkpoint_tar))
         checkpoint = torch.load(checkpoint_tar)
         start_epoch = checkpoint['epoch']
         best_top1_acc = checkpoint['best_top1_acc']
         model_student.load_state_dict(checkpoint['state_dict'], strict=False)
-        logging.info("loaded checkpoint {} epoch = {}" .format(checkpoint_tar, checkpoint['epoch']))
+        logger.info("loaded checkpoint {} epoch = {}" .format(checkpoint_tar, checkpoint['epoch']))
 
     # adjust the learning rate according to the checkpoint
     for epoch in range(start_epoch):
@@ -158,45 +172,54 @@ def main():
 
     # train the model
     epoch = start_epoch
+    best_acc = 0
     temp_increase = 100**(1./args.epochs)
     while epoch < args.epochs:
-        train_obj, train_top1_acc,  train_top5_acc, ratio_ones = train(epoch,  train_loader, model_student, model_teacher, criterion_kd, optimizer, scheduler, writer)
+        train_obj, train_top1_acc,  train_top5_acc, ratio_ones = train(epoch,  train_loader, model_student, model_teacher, criterion, optimizer, scheduler, writer,logger)
         # update temp_s based on sampled_iter per epoch
-        for m in model_student.module.mask_modules:
-            if epoch == args.epochs-1:
-                print("prune int before last test......")
+        if epoch == args.epochs-1:
+            for m in model_student.module.mask_modules:
+                logger.info("prune int before last test......")
                 m.mask= torch.where(m.mask >= 0.5, torch.full_like(m.mask, 1), m.mask)
                 m.mask= torch.where(m.mask < 0.5, torch.full_like(m.mask, 0), m.mask)
-            else:
-                m.mask_discrete = torch.bernoulli(m.mask)
-                m.sampled_iter += m.mask_discrete
-                m.temp_s = temp_increase**m.sampled_iter
-                # print('sample_iter:', m.sampled_iter.tolist(), '  |  temp_s:', [round(item,3) for item in m.temp_s.tolist()])
         
-        valid_obj, valid_top1_acc, valid_top5_acc = validate(epoch, val_loader, model_student, criterion, args, writer)
+        valid_obj, valid_top1_acc, valid_top5_acc = validate(epoch, val_loader, model_student, criterion, args, writer,logger)
+        
+        for m in model_student.module.mask_modules:
+            m.mask_discrete = torch.bernoulli(m.mask)
+            m.sampled_iter += m.mask_discrete
+            m.temp_s = temp_increase**m.sampled_iter
+            # print('sample_iter:', m.sampled_iter.tolist(), '  |  temp_s:', [round(item,3) for item in m.temp_s.tolist()])
 
-        is_best = False
-        if valid_top1_acc > best_top1_acc:
-            best_top1_acc = valid_top1_acc
-            is_best = True
+        # save latest model
+        save_name = os.path.join(*[args.save, 'model_latest.pt'])
+        torch.save({
+                'model': model_student.state_dict(),
+                'epoch': epoch,
+                'valid_acc': valid_top1_acc,
+            }, save_name)
 
-        save_checkpoint({
-            'epoch': epoch,
-            'state_dict': model_student.state_dict(),
-            'best_top1_acc': best_top1_acc,
-            'optimizer' : optimizer.state_dict(),
-            }, is_best, args.save)
+        # save the model of the best epoch
+        best_model_path = os.path.join(*[args.save_dir, 'model_best.pt'])
+        if valid_top1_acc > best_acc:
+            torch.save({
+                'model': model_student.state_dict(),
+                'epoch': epoch,
+                'valid_acc': valid_top1_acc,
+            }, best_model_path)
+            best_acc = valid_top1_acc
+        logger.info('Best Accuracy is %.3f%% at Epoch %d' %  (best_acc, epoch))
 
         epoch += 1
     
     avg_bit = args.Nbits * ratio_ones
-    logging.info('average bit is: %.3f ' % avg_bit)
+    logger.info('average bit is: %.3f ' % avg_bit)
 
     training_time = (time.time() - start_t) / 3600
-    print('total training time = {} hours'.format(training_time))
+    logger.info('total training time = {} hours'.format(training_time))
 
 
-def train(epoch, train_loader, model_student, model_teacher, criterion, optimizer, scheduler, writer):
+def train(epoch, train_loader, model_student, model_teacher, criterion, optimizer, scheduler, writer,logger):
     batch_time = AverageMeter('Time', ':6.3f')
     data_time = AverageMeter('Data', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
@@ -210,18 +233,18 @@ def train(epoch, train_loader, model_student, model_teacher, criterion, optimize
         prefix="Epoch: [{}]".format(epoch))
 
     model_student.train()
-    model_teacher.eval()
+    # model_teacher.eval()
     end = time.time()
     scheduler.step()
 
     for param_group in optimizer.param_groups:
         cur_lr = param_group['lr']
-    print('learning_rate:', cur_lr)
+    logger.info('learning_rate::%.3f'% cur_lr)
 
     # update global temp
     temp_increase = 100**(1./args.epochs)
     if epoch > 0: model_student.module.temp = temp_increase**epoch
-    logging.info('Current global temp:%.3f'% round(model_student.module.temp,3))
+    logger.info('Current global temp:%.3f'% round(model_student.module.temp,3))
 
     
     for i, (images, target) in enumerate(train_loader):
@@ -231,7 +254,7 @@ def train(epoch, train_loader, model_student, model_teacher, criterion, optimize
 
         # compute outputy
         logits_student = model_student(images)
-        logits_teacher = model_teacher(images)
+        # logits_teacher = model_teacher(images)
 
         masks = [m.mask for m in model_student.module.mask_modules]
         mask_discrete = [m.mask_discrete for m in model_student.module.mask_modules]
@@ -248,10 +271,10 @@ def train(epoch, train_loader, model_student, model_teacher, criterion, optimize
         writer.add_scalar('Ratio of ones in bit mask', ratio_ones, epoch) 
 
         entries_sum = sum(m.sum() for m in masks)
+        
         # Budget-aware adjusting lmbda according to Eq(4)
         Tsparsity = args.target_Nbit / args.Nbits
-
-        loss = criterion(logits_student, logits_teacher)+(args.lmbda*(Tsparsity - (1-ratio_ones))) * entries_sum
+        loss = criterion(logits_student, target)+(args.lmbda*(Tsparsity - (1-ratio_ones))) * entries_sum
 
         # measure accuracy and record loss
         prec1, prec5 = accuracy(logits_student, target, topk=(1, 5))
@@ -275,7 +298,7 @@ def train(epoch, train_loader, model_student, model_teacher, criterion, optimize
 
     return losses.avg, top1.avg, top5.avg, ratio_ones
 
-def validate(epoch, val_loader, model, criterion, args, writer):
+def validate(epoch, val_loader, model, criterion, args, writer,logger):
     batch_time = AverageMeter('Time', ':6.3f')
     losses = AverageMeter('Loss', ':.4e')
     top1 = AverageMeter('Acc@1', ':6.2f')
@@ -310,7 +333,7 @@ def validate(epoch, val_loader, model, criterion, args, writer):
 
             progress.display(i)
 
-        print(' * acc@1 {top1.avg:.3f} acc@5 {top5.avg:.3f}'
+        logger.info(' * acc@1 {top1.avg:.3f} acc@5 {top5.avg:.3f}'
               .format(top1=top1, top5=top5))
         writer.add_scalar('Test Acc', top1.avg, epoch)
 
