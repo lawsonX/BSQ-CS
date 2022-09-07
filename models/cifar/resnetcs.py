@@ -82,7 +82,7 @@ def conv3x3(in_planes, out_planes, stride=1, Nbits=4, bin=True):
 class BasicBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, Nbits=4, act_bit=0, bin=True):
+    def __init__(self, inplanes, planes, stride=1, downsample=None, Nbits=4, act_bit=4, bin=False):
         super(BasicBlock, self).__init__()
         self.conv1 = conv3x3(inplanes, planes, stride, Nbits=Nbits, bin=bin)
         self.bn1 = nn.BatchNorm2d(planes)
@@ -180,7 +180,7 @@ class MaskedNet(nn.Module):
         for m in self.mask_modules: m.prune(self.temp)
 
 class ResStage(nn.Module):
-    def __init__(self, in_planes, out_planes, stride, padding, Nbits=4, act_bit=0, bias=False,bin=True):
+    def __init__(self, in_planes, out_planes, stride, padding, Nbits=4,act_bit=0, bin=True, bias=False):
         super(ResStage, self).__init__()
         downsample = None
         if stride != 1 or in_planes != out_planes:
@@ -189,9 +189,9 @@ class ResStage(nn.Module):
                 nn.BatchNorm2d(out_planes),
             )
             
-        self.block1 = BasicBlock(in_planes, out_planes, stride=stride, downsample=downsample, Nbits=Nbits, act_bit=act_bit, bin=True)
-        self.block2 = BasicBlock(out_planes, out_planes, stride=1, downsample=None, Nbits=Nbits, act_bit=act_bit, bin=True)
-        self.block3 = BasicBlock(out_planes, out_planes, stride=1, downsample=None, Nbits=Nbits, act_bit=act_bit, bin=True)
+        self.block1 = BasicBlock(in_planes, out_planes, stride=stride, downsample=downsample, Nbits=Nbits, act_bit=act_bit, bin=False)
+        self.block2 = BasicBlock(out_planes, out_planes, stride=1, downsample=None, Nbits=Nbits, act_bit=act_bit, bin=False)
+        self.block3 = BasicBlock(out_planes, out_planes, stride=1, downsample=None, Nbits=Nbits, act_bit=act_bit, bin=False)
 
     def forward(self, x, temp):
         out = self.block1(x, temp)
@@ -200,7 +200,7 @@ class ResStage(nn.Module):
         return out
 
 class ResNet(MaskedNet):
-    def __init__(self, num_classes=10, Nbits=8, act_bit=0, bin=True):
+    def __init__(self, num_classes=10, Nbits=8,act_bit=0, bin=True):
         super(ResNet, self).__init__()
 
         self.conv1 = BitConv2d(3, 16, kernel_size=3, padding=1,bias=False, Nbits=Nbits, bin=bin)

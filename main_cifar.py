@@ -1,5 +1,4 @@
 import os
-import time
 import argparse
 import torch
 import torch.nn as nn
@@ -11,11 +10,8 @@ import torch.backends.cudnn as cudnn
 import numpy as np
 import random
 from models.cifar.resnetcs import ResNet
-import logging
-import torchvision.models as models
-from utils_ import *
-import KD_loss
 from torch.utils.tensorboard import SummaryWriter
+import logging
 
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 parser = argparse.ArgumentParser(description='Training a ResNet on CIFAR-10 with Continuous Sparsification')
@@ -23,16 +19,16 @@ parser = argparse.ArgumentParser(description='Training a ResNet on CIFAR-10 with
 parser.add_argument('--batch-size', type=int, default=512, metavar='N', help='input batch size for training/val/test (default: 128)')
 parser.add_argument('--epochs', type=int, default=600, help='number of epochs to train (default: 300)')
 parser.add_argument('--class', type=int, default=10, help='class of output')
-parser.add_argument('--Nbits', type=int, default=2, help='quantization bitwidth for weight')
-parser.add_argument('--target-Nbit', type=float, default=2, help='Target Nbit')
-parser.add_argument('--lr', type=float, default=0.05, metavar='LR', help='learning rate (default: 0.1)')
-parser.add_argument('--workers', type=int, default=8, help='number of data loading workers (default: 2)')
+parser.add_argument('--Nbits', type=int, default=6, help='quantization bitwidth for weight')
+parser.add_argument('--target', type=int, default=3, help='Target Nbit')
+parser.add_argument('--act', type=int, default=0, help='quantization bitwidth for activation')
+parser.add_argument('--lr', type=float, default=0.01, metavar='LR', help='learning rate (default: 0.1)')
+parser.add_argument('--workers', type=int, default=2, help='number of data loading workers (default: 2)')
 parser.add_argument('--decay', type=float, default=5e-4, help='weight decay (default: 5e-4)')
-parser.add_argument('--lmbda', type=float, default=0.1, help='lambda for L1 mask regularization (default: 0.01)')
+parser.add_argument('--lmbda', type=float, default=1e-9, help='lambda for L1 mask regularization (default: 1e-8)')
 parser.add_argument('--final-temp', type=float, default=200, help='temperature at the end of each round (default: 200)')
-parser.add_argument('--save_dir', type=str, default='train_result/0901/CIFAR_T2N2_LR005_LD01_newT', help='save path of weight and log files')
+parser.add_argument('--save_dir', type=str, default='train_result/0907/CIFAR_A0T3N6_lmd1e-9', help='save path of weight and log files')
 parser.add_argument('--log_file', type=str, default='train.log', help='save path of weight and log files')
-parser.add_argument('--teacher', type=str, default='resnet18', help='path of ImageNet')
 args = parser.parse_args()
 
 
@@ -89,27 +85,14 @@ if __name__ == '__main__':
     #define ResNet20
     model = ResNet(
         num_classes=10,
-        Nbits=args.Nbits, 
+        Nbits=args.Nbits,
+        act_bit = args.act,
         bin=True
         ).to(device)
-    logger.info(model)
-
-    # print("Loading teacher model....", args.teacher)
-    # model_teacher = models.__dict__[args.teacher](pretrained=True).to(device)
-    # fc_features = model_teacher.fc.in_features
-    # model_teacher.fc = nn.Linear(fc_features,10).to(device)
-
-    # for p in model_teacher.parameters():
-    #     p.requires_grad = False
-    # model_teacher.eval()
+    # logger.info(model)
 
     #define loss funtion & optimizer
     criterion = nn.CrossEntropyLoss()
-    # criterion_smooth = CrossEntropyLabelSmooth(10, 0.1)
-    # criterion_smooth = criterion_smooth.to(device)
-    # criterion_kd = KD_loss.DistributionLoss()
-    # criterion_kd = nn.KLDivLoss()
-    
     optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=args.decay)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs, eta_min=0, last_epoch=-1)
     TP = model.total_param()
@@ -118,7 +101,6 @@ if __name__ == '__main__':
     logger.info('start training!')
     best_acc = 0
     iters_per_reset = args.epochs-1
-    # temp_increase = args.final_temp**(1./iters_per_reset)
     temp_increase = 100**(1./args.epochs)
     for epoch in range(0, args.epochs):
         print('\nEpoch: %d' % (epoch + 1))
@@ -128,8 +110,8 @@ if __name__ == '__main__':
         total = 0.0
         
         # update global temp
-        if epoch > 0: model.temp = min(model.temp * temp_increase**epoch, args.final_temp)
-        print('Current global temp:', round(model.temp,3))
+        if epoch > 0: model.temp = temp_increase**epoch
+        logger.info('Current global temp:%.3f'% round(model.temp,3))
 
         for i, data in enumerate(trainloader, 0):
             #prepare dataset
@@ -140,8 +122,7 @@ if __name__ == '__main__':
             optimizer.zero_grad()
             
             #forward & backward
-            logits_student = model(inputs)
-            # logits_teacher = model_teacher(inputs)
+            outputs = model(inputs)
 
             masks = [m.mask for m in model.mask_modules]
             mask_discrete = [m.mask_discrete for m in model.mask_modules]
@@ -157,28 +138,39 @@ if __name__ == '__main__':
                 ones += o
             ratio_one = ones/total_ele
             writer.add_scalar('Ratio of ones in bit mask', ratio_one, epoch)
-            if i % 100 == 0 :
-                print('Ratio of ones in bit mask', ratio_one)
 
             entries_sum = sum(m.sum() for m in masks)
             # Budget-aware adjusting lmbda according to Eq(4)
-            Tsparsity = args.target_Nbit / args.Nbits
-            loss = criterion(logits_student, labels)  + (args.lmbda*(Tsparsity - (1-ratio_one))) * entries_sum  #/TP # L1 Reg on mask
+            Tsparsity = args.target / args.Nbits
+            loss = criterion(outputs, labels)  + (args.lmbda*(Tsparsity - (1-ratio_one))) * entries_sum  #/TP # L1 Reg on mask
             loss.backward(retain_graph=True)
             optimizer.step()
             scheduler.step()
             
             #print ac & loss in each batch
             sum_loss += loss.item()
-            _, predicted = torch.max(logits_student.data, 1)
+            _, predicted = torch.max(outputs.data, 1)
             total += labels.size(0)
             correct += predicted.eq(labels.data).cpu().sum()
             train_acc = 100. * correct / total
-            if i % 100 == 0:
-                logger.info('Epoch:[{}]\t loss={:.5f}\t acc={:.3f}'.format(epoch+1 , sum_loss / (i + 1), train_acc ))
+            if i % 50 == 0:
+                logger.info('Epoch:[{}]\t Ratio_ones={:.5f}\t loss={:.5f}\t acc={:.3f}'.format(epoch+1 ,ratio_one, sum_loss / (i + 1), train_acc ))
             writer.add_scalar('train loss', sum_loss / (i + 1), epoch)
+            save_name = os.path.join(*[args.save_dir, 'model_latest.pt'])
+            torch.save({
+                    'model': model.state_dict(),
+                    'epoch': epoch,
+                    'valid_acc': train_acc,
+                }, save_name)
 
-        #get the ac with testdataset in each epoch
+        # finalize the continuous bitmask to discrete
+        if epoch == args.epochs-1:
+            print("prune int before last test......")
+            for m in model.mask_modules:
+                m.mask= torch.where(m.mask >= 0.5, torch.full_like(m.mask, 1), m.mask)
+                m.mask= torch.where(m.mask < 0.5, torch.full_like(m.mask, 0), m.mask)
+                # print(m.mask)
+        
         print('Waiting Test...')
         with torch.no_grad():
             correct = 0
@@ -200,9 +192,9 @@ if __name__ == '__main__':
             m.mask_discrete = torch.bernoulli(m.mask)
             m.sampled_iter += m.mask_discrete
             m.temp_s = temp_increase**m.sampled_iter
-            print('sample_iter:', m.sampled_iter.tolist(), '  |  temp_s:', [round(item,3) for item in m.temp_s.tolist()])
+            # print('sample_iter:', m.sampled_iter.tolist(), '  |  temp_s:', [round(item,3) for item in m.temp_s.tolist()])
 
-        #save the model of the best epoch
+        # save the model of the best epoch
         best_model_path = os.path.join(*[args.save_dir, 'model_best.pt'])
         if test_acc > best_acc:
             torch.save({
@@ -213,6 +205,8 @@ if __name__ == '__main__':
             best_acc = test_acc
             best_epoch = epoch+1
         logger.info('Best Accuracy is %.3f%% at Epoch %d' %  (best_acc, best_epoch))
+
     TP = model.total_param()
-    print('Train has finished, weight and log saved at ', str(args.save_dir))
-    logger.info('model size is:', str(TP))
+    avg_bit = args.Nbits * ratio_one
+    logger.info('model size is: %.3f' % TP)
+    logger.info('average bit is: %.3f ' % avg_bit)

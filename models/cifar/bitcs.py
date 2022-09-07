@@ -91,7 +91,7 @@ class BitLinear(Module):
             It has the same shape as weight (out_features x in_features)
 
     """
-    def __init__(self, in_features, out_features, Nbits=8, bias=True, bin=True):
+    def __init__(self, in_features, out_features, Nbits=8, bias=True, bin=False):
         super(BitLinear, self).__init__()
         self.in_features = in_features
         self.out_features = out_features
@@ -100,64 +100,57 @@ class BitLinear(Module):
         self.exps = torch.nn.Parameter(torch.Tensor((2**ex)/(2**(self.Nbits)-1)).float())
         self.bNbits = Nbits
         self.bexps =torch.nn.Parameter( torch.Tensor((2**ex)/(2**(self.bNbits)-1)).float())
-        # self.bin = bin
-        # self.total_weight = out_features*in_features
-        # self.total_bias = out_features
+        self.bin = bin
+        self.total_weight = out_features*in_features
+        self.total_bias = out_features
         self.zero=False
         self.bzero=False
-        # self.ft = False
+        self.ft = False
 
         # init bit mask
-        self.mask_weight = torch.nn.Parameter(torch.Tensor(Nbits))
-        torch.nn.init.constant_(self.mask_weight, 1)
+        self.mask_weight = torch.nn.Parameter(torch.Tensor(Nbits)).to(device)
+        torch.nn.init.constant_(self.mask_weight, 0)
+        # self.mask_discrete = torch.nn.Parameter(torch.Tensor(Nbits)).to(device)
+        # torch.nn.init.constant_(self.mask_discrete, 1)
+        # self.sampled_iter = torch.nn.Parameter(torch.Tensor(Nbits)).to(device)
+        # torch.nn.init.constant_(self.sampled_iter, 1)
+        # self.temp_s= torch.nn.Parameter(torch.Tensor(Nbits)).to(device)
+        # torch.nn.init.constant_(self.temp_s, 1)
+        self.mask_discrete = torch.ones(Nbits,requires_grad=False).to(device)
+        self.sampled_iter = torch.ones(Nbits,requires_grad=False).to(device)
+        self.temp_s = torch.ones(Nbits,requires_grad=False).to(device)
 
-        self.mask = torch.nn.Parameter(torch.empty(Nbits))
+        if self.bin:
+            self.pweight = Parameter(torch.Tensor(out_features, in_features, Nbits))
+            self.nweight = Parameter(torch.Tensor(out_features, in_features, Nbits))
+            self.scale = Parameter(torch.Tensor(1)).to(device)
 
-        self.mask_discrete = torch.nn.Parameter(torch.Tensor(Nbits),requires_grad=False)
-        torch.nn.init.constant_(self.mask_discrete, 1)
-
-        self.sampled_iter = torch.nn.Parameter(torch.Tensor(Nbits),requires_grad=False)
-        torch.nn.init.constant_(self.sampled_iter, 1)
-        
-        self.temp_s= torch.nn.Parameter(torch.Tensor(Nbits),requires_grad=False)
-        torch.nn.init.constant_(self.temp_s, 1)
-
-        # self.mask = torch.empty(Nbits)
-        # self.mask_discrete = torch.ones(Nbits,requires_grad=False)
-        # self.sampled_iter = torch.ones(Nbits,requires_grad=False)
-        # self.temp_s = torch.ones(Nbits,requires_grad=False)
-
-        # if self.bin:
-        self.pweight = Parameter(torch.Tensor(out_features, in_features, Nbits))
-        self.nweight = Parameter(torch.Tensor(out_features, in_features, Nbits))
-        self.scale = Parameter(torch.Tensor(1))
-
-        if bias:
-            self.pbias = Parameter(torch.Tensor(out_features, Nbits))
-            self.nbias = Parameter(torch.Tensor(out_features, Nbits))
-            self.biasscale = Parameter(torch.Tensor(1))
+            if bias:
+                self.pbias = Parameter(torch.Tensor(out_features, Nbits))
+                self.nbias = Parameter(torch.Tensor(out_features, Nbits))
+                self.biasscale = Parameter(torch.Tensor(1)).to(device)
+            else:
+                self.register_parameter('pbias', None)
+                self.register_parameter('nbias', None)
+                self.register_parameter('biasscale', None)
+            self.bin_reset_parameters()
+            # book keeping
+            self.register_parameter('weight', None)
+            self.register_parameter('bias', None)
         else:
+            self.weight = Parameter(torch.Tensor(out_features, in_features))
+            if bias:
+                self.bias = Parameter(torch.Tensor(out_features))
+            else:
+                self.register_parameter('bias', None)
+            self.reset_parameters()
+            # book keeping
+            self.register_parameter('pweight', None)
+            self.register_parameter('nweight', None)
+            self.register_parameter('scale', None)
             self.register_parameter('pbias', None)
             self.register_parameter('nbias', None)
             self.register_parameter('biasscale', None)
-        self.bin_reset_parameters()
-        # book keeping
-        self.register_parameter('weight', None)
-        self.register_parameter('bias', None)
-        # else:
-        #     self.weight = Parameter(torch.Tensor(out_features, in_features))
-        #     if bias:
-        #         self.bias = Parameter(torch.Tensor(out_features))
-        #     else:
-        #         self.register_parameter('bias', None)
-        #     self.reset_parameters()
-        #     # book keeping
-        #     self.register_parameter('pweight', None)
-        #     self.register_parameter('nweight', None)
-        #     self.register_parameter('scale', None)
-        #     self.register_parameter('pbias', None)
-        #     self.register_parameter('nbias', None)
-        #     self.register_parameter('biasscale', None)
 
     def reset_parameters(self):
         # For float model
@@ -224,31 +217,33 @@ class BitLinear(Module):
 
     def forward(self, input, temp=1):
         # compute continuous bit mask
-        self.mask = torch.sigmoid(self.temp_s * self.mask_weight)
+        self.mask = torch.sigmoid(self.temp_s * self.mask_weight).to(device)
 
-        # if self.bin:
-        dev = self.pweight.device
-        pweight = torch.sigmoid(temp * self.pweight)
-        nweight = torch.sigmoid(temp * self.nweight)
-        weight = torch.mul(pweight-nweight, self.exps)
-        masked_weight = weight * self.mask * self.mask_discrete
-        weight =  torch.sum(masked_weight,dim=2) * self.scale
+        if self.bin:
+            dev = self.pweight.device
+            pweight = torch.sigmoid(temp * self.pweight)
+            nweight = torch.sigmoid(temp * self.nweight)
+            weight = torch.mul(pweight-nweight, self.exps)
+            # print(weight)
+            # print(weight.device, self.mask.device, self.mask_discrete.device)
+            masked_weight = weight * self.mask * self.mask_discrete
+            weight =  torch.sum(masked_weight,dim=2) * self.scale
 
-        if self.pbias is not None:
-            bias = torch.mul((self.pbias-self.nbias), self.bexps.to(dev))
-            bias = bit_STE.apply(torch.sum(bias,dim=1), self.bNbits, self.bzero) * self.biasscale
+            if self.pbias is not None:
+                bias = torch.mul((self.pbias-self.nbias), self.bexps.to(dev))
+                bias = bit_STE.apply(torch.sum(bias,dim=1), self.bNbits, self.bzero) * self.biasscale
+            else:
+                bias = None
+            return F.linear(input, weight, bias)
+        elif self.ft:
+            weight = bit_STE.apply(self.weight, self.Nbits, self.zero) * self.scale
+            if self.pbias is not None:
+                bias = bit_STE.apply(self.bias, self.bNbits, self.bzero) * self.biasscale
+            else:
+                bias = None
+            return F.linear(input, weight, bias)
         else:
-            bias = None
-        return F.linear(input, weight, bias)
-        # elif self.ft:
-        #     weight = bit_STE.apply(self.weight, self.Nbits, self.zero) * self.scale
-        #     if self.pbias is not None:
-        #         bias = bit_STE.apply(self.bias, self.bNbits, self.bzero) * self.biasscale
-        #     else:
-        #         bias = None
-        #     return F.linear(input, weight, bias)
-        # else:
-        #     return F.linear(input, self.weight, self.bias)
+            return F.linear(input, self.weight, self.bias)
 
 ############################################################################################################################################################
 
@@ -287,70 +282,63 @@ class Bit_ConvNd(Module):
         self.bexps = torch.nn.Parameter(torch.Tensor((2**ex)/(2**(self.bNbits)-1)).float())
         self.zero=False
         self.bzero=False
-        # self.ft=False
-        # self.bin = bin
+        self.ft=False
+        self.bin = bin
 
         # init bit mask
         self.mask_weight = torch.nn.Parameter(torch.Tensor(Nbits))
-        torch.nn.init.constant_(self.mask_weight, 1)
+        torch.nn.init.constant_(self.mask_weight, 0)
+        # self.mask_discrete = torch.nn.Parameter(torch.Tensor(Nbits)).to(device)
+        # torch.nn.init.constant_(self.mask_discrete, 1)
+        # self.sampled_iter = torch.nn.Parameter(torch.Tensor(Nbits)).to(device)
+        # torch.nn.init.constant_(self.sampled_iter, 1)
+        # self.temp_s= torch.nn.Parameter(torch.Tensor(Nbits)).to(device)
+        # torch.nn.init.constant_(self.temp_s, 1)
+        self.mask_discrete = torch.ones(Nbits,requires_grad=False).to(device)
+        self.sampled_iter = torch.ones(Nbits,requires_grad=False).to(device)
+        self.temp_s = torch.ones(Nbits,requires_grad=False).to(device)
 
-        self.mask = torch.nn.Parameter(torch.empty(Nbits))
-
-        self.mask_discrete = torch.nn.Parameter(torch.Tensor(Nbits),requires_grad=False)
-        torch.nn.init.constant_(self.mask_discrete, 1)
-
-        self.sampled_iter = torch.nn.Parameter(torch.Tensor(Nbits),requires_grad=False)
-        torch.nn.init.constant_(self.sampled_iter, 1)
-
-        self.temp_s= torch.nn.Parameter(torch.Tensor(Nbits),requires_grad=False)
-        torch.nn.init.constant_(self.temp_s, 1)
-        
-        # self.mask = torch.empty(Nbits)
-        # self.mask_discrete = torch.ones(Nbits,requires_grad=False)
-        # self.sampled_iter = torch.ones(Nbits,requires_grad=False)
-        # self.temp_s = torch.ones(Nbits,requires_grad=False)
-
-        # if self.bin:
-        if transposed:
-            self.pweight = Parameter(torch.Tensor(in_channels, out_channels // groups, *kernel_size, Nbits))
-            self.nweight = Parameter(torch.Tensor(in_channels, out_channels // groups, *kernel_size, Nbits))
-            self.scale = Parameter(torch.Tensor(1))
+        if self.bin:
+            if transposed:
+                self.pweight = Parameter(torch.Tensor(in_channels, out_channels // groups, *kernel_size, Nbits))
+                self.nweight = Parameter(torch.Tensor(in_channels, out_channels // groups, *kernel_size, Nbits))
+                self.scale = Parameter(torch.Tensor(1)).to(device)
+            else:
+                self.pweight = Parameter(torch.Tensor(out_channels, in_channels // groups, *kernel_size, Nbits))
+                self.nweight = Parameter(torch.Tensor(out_channels, in_channels // groups, *kernel_size, Nbits))
+                self.scale = Parameter(torch.Tensor(1)).to(device)
+                
+            if bias:
+                self.pbias = Parameter(torch.Tensor(out_channels, Nbits))
+                self.nbias = Parameter(torch.Tensor(out_channels, Nbits))
+                self.biasscale = Parameter(torch.Tensor(1))
+            else:
+                self.register_parameter('pbias', None)
+                self.register_parameter('nbias', None)
+                self.register_parameter('biasscale', None)
+            self.bin_reset_parameters()
+            # book keeping
+            self.register_parameter('weight', None)
+            self.register_parameter('bias', None)
         else:
-            self.pweight = Parameter(torch.Tensor(out_channels, in_channels // groups, *kernel_size, Nbits))
-            self.nweight = Parameter(torch.Tensor(out_channels, in_channels // groups, *kernel_size, Nbits))
-            self.scale = Parameter(torch.Tensor(1))
-            
-        if bias:
-            self.pbias = Parameter(torch.Tensor(out_channels, Nbits))
-            self.nbias = Parameter(torch.Tensor(out_channels, Nbits))
-            self.biasscale = Parameter(torch.Tensor(1))
-        else:
+            if transposed:
+                self.weight = Parameter(torch.Tensor(
+                    in_channels, out_channels // groups, *kernel_size))
+            else:
+                self.weight = Parameter(torch.Tensor(
+                    out_channels, in_channels // groups, *kernel_size))
+            if bias:
+                self.bias = Parameter(torch.Tensor(out_channels))
+            else:
+                self.register_parameter('bias', None)
+            self.reset_parameters()
+            # book keeping
+            self.register_parameter('pweight', None)
+            self.register_parameter('nweight', None)
+            self.register_parameter('scale', None)
             self.register_parameter('pbias', None)
             self.register_parameter('nbias', None)
             self.register_parameter('biasscale', None)
-        self.bin_reset_parameters()
-        # book keeping
-        self.register_parameter('weight', None)
-        self.register_parameter('bias', None)
-        # else:
-        #     if transposed:
-        #         self.weight = Parameter(torch.Tensor(
-        #             in_channels, out_channels // groups, *kernel_size))
-        #     else:
-        #         self.weight = Parameter(torch.Tensor(
-        #             out_channels, in_channels // groups, *kernel_size))
-        #     if bias:
-        #         self.bias = Parameter(torch.Tensor(out_channels))
-        #     else:
-        #         self.register_parameter('bias', None)
-        #     self.reset_parameters()
-        #     # book keeping
-        #     self.register_parameter('pweight', None)
-        #     self.register_parameter('nweight', None)
-        #     self.register_parameter('scale', None)
-        #     self.register_parameter('pbias', None)
-        #     self.register_parameter('nbias', None)
-        #     self.register_parameter('biasscale', None)
 
     def reset_parameters(self):
         "used in init when not binary"
@@ -447,31 +435,34 @@ class BitConv2d(Bit_ConvNd):
                         self.padding, self.dilation, self.groups)
 
     def forward(self, input, temp=1):
+        # print(self.mask_weight)
         self.mask = torch.sigmoid(self.temp_s * self.mask_weight)
-        # if self.bin:
-        # dev = self.pweight.device
-        pweight = torch.sigmoid(temp * self.pweight) # continuous conversion
-        nweight = torch.sigmoid(temp * self.nweight)
-        weight = torch.mul(pweight-nweight, self.exps)
-        masked_weight = weight * self.mask * self.mask_discrete
 
-        weight =  torch.sum(masked_weight,dim=4) * self.scale
+        if self.bin:
+            dev = self.pweight.device
+            pweight = torch.sigmoid(temp * self.pweight) # continuous conversion
+            nweight = torch.sigmoid(temp * self.nweight)
+            weight = torch.mul(pweight-nweight, self.exps)
+            # print(weight)
+            # print(weight.device, self.mask.device, self.mask_discrete.device)
+            masked_weight = weight * self.mask * self.mask_discrete
+            weight =  torch.sum(masked_weight,dim=4) * self.scale
 
-        if self.pbias is not None:
-            bias = torch.mul((self.pbias-self.nbias), self.bexps.to(device))
-            bias = bit_STE.apply(torch.sum(bias,dim=1), self.bNbits, self.bzero) * self.biasscale
+            if self.pbias is not None:
+                bias = torch.mul((self.pbias-self.nbias), self.bexps.to(device))
+                bias = bit_STE.apply(torch.sum(bias,dim=1), self.bNbits, self.bzero) * self.biasscale
+            else:
+                bias = None
+            return self.conv2d_forward(input, weight, bias)
+        elif self.ft:
+            weight = bit_STE.apply(self.weight, self.Nbits, self.zero) * self.scale
+            if self.pbias is not None:
+                bias = bit_STE.apply(self.bias, self.bNbits, self.bzero) * self.biasscale
+            else:
+                bias = None
+            return self.conv2d_forward(input, weight, bias)
         else:
-            bias = None
-        return self.conv2d_forward(input, weight, bias)
-        # elif self.ft:
-        #     weight = bit_STE.apply(self.weight, self.Nbits, self.zero) * self.scale
-        #     if self.pbias is not None:
-        #         bias = bit_STE.apply(self.bias, self.bNbits, self.bzero) * self.biasscale
-        #     else:
-        #         bias = None
-        #     return self.conv2d_forward(input, weight, bias)
-        # else:
-        #     return self.conv2d_forward(input, self.weight, self.bias)
+            return self.conv2d_forward(input, self.weight, self.bias)
 
 if __name__ == '__main__':
     def conv3x3(in_planes, out_planes, stride=1, Nbits=8, bin=True):
