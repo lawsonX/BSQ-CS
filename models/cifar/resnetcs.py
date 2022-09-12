@@ -82,7 +82,7 @@ def conv3x3(in_planes, out_planes, stride=1, Nbits=4, bin=True):
 class BasicBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, Nbits=4, act_bit=4, bin=False):
+    def __init__(self, inplanes, planes, stride=1, downsample=None, Nbits=4, act_bit=4, bin=True):
         super(BasicBlock, self).__init__()
         self.conv1 = conv3x3(inplanes, planes, stride, Nbits=Nbits, bin=bin)
         self.bn1 = nn.BatchNorm2d(planes)
@@ -189,9 +189,9 @@ class ResStage(nn.Module):
                 nn.BatchNorm2d(out_planes),
             )
             
-        self.block1 = BasicBlock(in_planes, out_planes, stride=stride, downsample=downsample, Nbits=Nbits, act_bit=act_bit, bin=False)
-        self.block2 = BasicBlock(out_planes, out_planes, stride=1, downsample=None, Nbits=Nbits, act_bit=act_bit, bin=False)
-        self.block3 = BasicBlock(out_planes, out_planes, stride=1, downsample=None, Nbits=Nbits, act_bit=act_bit, bin=False)
+        self.block1 = BasicBlock(in_planes, out_planes, stride=stride, downsample=downsample, Nbits=Nbits, act_bit=act_bit, bin=bin)
+        self.block2 = BasicBlock(out_planes, out_planes, stride=1, downsample=None, Nbits=Nbits, act_bit=act_bit, bin=bin)
+        self.block3 = BasicBlock(out_planes, out_planes, stride=1, downsample=None, Nbits=Nbits, act_bit=act_bit, bin=bin)
 
     def forward(self, x, temp):
         out = self.block1(x, temp)
