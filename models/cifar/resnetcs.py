@@ -180,7 +180,7 @@ class MaskedNet(nn.Module):
         for m in self.mask_modules: m.prune(self.temp)
 
 class ResStage(nn.Module):
-    def __init__(self, in_planes, out_planes, stride, padding, Nbits=4,act_bit=0, bin=True, bias=False):
+    def __init__(self, in_planes, out_planes, stride, padding, Nbits=8,act_bit=0, bin=True, bias=False):
         super(ResStage, self).__init__()
         downsample = None
         if stride != 1 or in_planes != out_planes:
