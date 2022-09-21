@@ -23,8 +23,8 @@ import torchvision.models as models
 from folder2lmdb import ImageFolderLMDB
 from progress.bar import Bar
 
-from csbsq.resnetcs18 import ResNet18
-from csbsq.resnetcs50 import ResNet50
+from models.imagenet.resnetcs18 import ResNet18
+from models.imagenet.resnetcs50 import ResNet50
 
 from torch.utils.tensorboard import SummaryWriter
 
