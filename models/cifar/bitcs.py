@@ -121,6 +121,7 @@ class BitLinear(Module):
             self.mask_discrete = torch.ones(Nbits).cuda()
             self.sampled_iter = torch.ones(Nbits).cuda()
             self.temp_s = torch.ones(Nbits).cuda()
+            
             self.pweight = Parameter(torch.Tensor(out_features, in_features, Nbits))
             self.nweight = Parameter(torch.Tensor(out_features, in_features, Nbits))
             self.scale = Parameter(torch.Tensor(1))
@@ -151,10 +152,6 @@ class BitLinear(Module):
             self.register_parameter('pbias', None)
             self.register_parameter('nbias', None)
             self.register_parameter('biasscale', None)
-    
-    # def init_mask(self):
-    #     self.mask_weight = Parameter(torch.Tensor(self.Nbits))
-    #     init.constant_(self.mask_weight, 0)
     
     def reset_parameters(self):
         # For float model
@@ -297,7 +294,6 @@ class Bit_ConvNd(Module):
             self.mask_weight = Parameter(torch.Tensor(self.Nbits))
             init.constant_(self.mask_weight, 1)
             # self.mask = torch.empty(Nbits,requires_grad=True).cuda()
-            # self.register_parameter("mask", self.mask)
             self.mask_discrete = torch.ones(Nbits).cuda()
             self.sampled_iter = torch.ones(Nbits).cuda()
             self.temp_s = torch.ones(Nbits).cuda()
@@ -341,10 +337,6 @@ class Bit_ConvNd(Module):
             self.register_parameter('pbias', None)
             self.register_parameter('nbias', None)
             self.register_parameter('biasscale', None)
-    
-    # def init_mask(self):
-    #     self.mask_weight = Parameter(torch.Tensor(self.Nbits))
-    #     init.constant_(self.mask_weight, 0)
 
     def reset_parameters(self):
         "used in init when not binary"
@@ -443,7 +435,6 @@ class BitConv2d(Bit_ConvNd):
     def forward(self, input, temp=1):
         if self.bin:
             self.mask = torch.sigmoid(self.temp_s * self.mask_weight)
-            # mask = self.mask
             pweight = torch.sigmoid(temp * self.pweight) # continuous conversion
             nweight = torch.sigmoid(temp * self.nweight)
             weight = torch.mul(pweight-nweight, self.exps)
